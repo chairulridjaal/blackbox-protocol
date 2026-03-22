@@ -4,7 +4,9 @@ from utils.html_utils import extract_html
 
 GENERATION_MODEL = "claude-sonnet-4.6"
 
-SYSTEM_PROMPT = """You are a senior Mozilla Gecko engine security researcher specializing in memory corruption vulnerabilities. Your goal is to write fuzz test cases that trigger use-after-free, heap overflow, type confusion, and other memory safety bugs in Firefox — NOT simple hangs or timeouts.
+SYSTEM_PROMPT = """You are a vulnerability researcher writing proof-of-concept reproducers for Mozilla's bug bounty program. Your work follows the same methodology used by professional CVE researchers: identify a specific memory safety property, construct the minimal HTML/JS that violates it, verify it is reproducible, and document which Gecko component is responsible.
+
+Your output will be reviewed by Mozilla's security team. Generic DOM manipulation or resource exhaustion tests will be immediately rejected. What gets accepted — and paid — is a precise, minimal file that makes a Gecko C++ developer say 'yes, I can see exactly which object lifetime invariant is being violated here.'
 
 You understand:
 - DOM object lifecycle: when nodes are removed, adopted, or moved, internal C++ pointers can become dangling
@@ -55,6 +57,21 @@ Example 3 — GC + active reference pattern:
 Always use these patterns as inspiration, not templates. Mutate, combine,
 and push them to extremes.
 
+Every test case must:
+1. Target one specific Gecko subsystem and name it in a comment
+2. Violate one specific memory safety property (object lifetime, type invariant, bounds, initialization state)
+3. Be minimal — strip everything not directly contributing to the violation
+4. Be reproducible — avoid timing dependencies unless the race condition itself IS the bug
+5. Include a top comment in this format:
+   <!--
+     Target: [Gecko component e.g. nsLayout, SpiderMonkey JIT]
+     Property: [what invariant is being violated]
+     Mechanism: [how the violation is triggered]
+     Expected: [what a sanitizer or crash would show]
+   -->
+
+The most valuable bugs come from object lifetime violations during callbacks, type confusion after deoptimization, and layout frame invalidation during active traversal. These are the patterns that consistently produce critical CVEs in Gecko.
+
 CRITICAL OUTPUT CONSTRAINTS:
 - Keep test cases under 150 lines of HTML total
 - JavaScript must complete execution within 5 seconds — no infinite loops, no unbounded recursion
@@ -67,37 +84,37 @@ These constraints ensure Firefox has time to fully process each test case within
 
 STRATEGIES = {
     "use_after_free": {
-        "prompt": "Generate a test case targeting USE-AFTER-FREE in DOM: remove a node from the DOM tree, then immediately trigger operations that reference it — access its .parentNode, read its .offsetHeight (forces layout on a freed frame), dispatch events to it, or use it as an argument to Range/Selection APIs. Use setTimeout(0) and MutationObserver to create timing where the C++ destructor runs before JS finishes.",
+        "prompt": "Generate a test case targeting USE-AFTER-FREE in DOM: remove a node from the DOM tree, then immediately trigger operations that reference it — access its .parentNode, read its .offsetHeight (forces layout on a freed frame), dispatch events to it, or use it as an argument to Range/Selection APIs. Use setTimeout(0) and MutationObserver to create timing where the C++ destructor runs before JS finishes. Your output must include the top comment block naming Target, Property, Mechanism, and Expected outcome. Write as if you are preparing a submission to Mozilla's security bug tracker.",
         "uses": 0,
         "crashes": 0,
     },
     "gc_pressure": {
-        "prompt": "Generate a test case that triggers GARBAGE COLLECTION at dangerous moments: allocate large ArrayBuffers to force GC, then immediately access DOM nodes, CSS computed styles, or canvas image data that may have been moved by the GC. Interleave GC-triggering allocations with WebGL texture uploads, AudioBuffer operations, or OffscreenCanvas transfers.",
+        "prompt": "Generate a test case that triggers GARBAGE COLLECTION at dangerous moments: allocate large ArrayBuffers to force GC, then immediately access DOM nodes, CSS computed styles, or canvas image data that may have been moved by the GC. Interleave GC-triggering allocations with WebGL texture uploads, AudioBuffer operations, or OffscreenCanvas transfers. Your output must include the top comment block naming Target, Property, Mechanism, and Expected outcome. Write as if you are preparing a submission to Mozilla's security bug tracker.",
         "uses": 0,
         "crashes": 0,
     },
     "type_confusion": {
-        "prompt": "Generate a test case targeting TYPE CONFUSION in SpiderMonkey: use Object.defineProperty to change getters/setters on prototype chains during JIT-compiled hot loops, convert between ArrayBuffer and SharedArrayBuffer views, abuse Proxy traps that return unexpected types, and trigger deoptimization while typed arrays are being accessed. Force the JIT to make wrong assumptions about object shapes.",
+        "prompt": "Generate a test case targeting TYPE CONFUSION in SpiderMonkey: use Object.defineProperty to change getters/setters on prototype chains during JIT-compiled hot loops, convert between ArrayBuffer and SharedArrayBuffer views, abuse Proxy traps that return unexpected types, and trigger deoptimization while typed arrays are being accessed. Force the JIT to make wrong assumptions about object shapes. Your output must include the top comment block naming Target, Property, Mechanism, and Expected outcome. Write as if you are preparing a submission to Mozilla's security bug tracker.",
         "uses": 0,
         "crashes": 0,
     },
     "layout_uaf": {
-        "prompt": "Generate a test case targeting USE-AFTER-FREE in CSS LAYOUT: trigger reflow callbacks (ResizeObserver, IntersectionObserver, scroll events) that mutate the DOM tree during layout computation. Remove elements that have pending CSS transitions or animations. Change display types during font-load callbacks. Force style recalculation on elements being removed by adoptNode or replaceChild.",
+        "prompt": "Generate a test case targeting USE-AFTER-FREE in CSS LAYOUT: trigger reflow callbacks (ResizeObserver, IntersectionObserver, scroll events) that mutate the DOM tree during layout computation. Remove elements that have pending CSS transitions or animations. Change display types during font-load callbacks. Force style recalculation on elements being removed by adoptNode or replaceChild. Your output must include the top comment block naming Target, Property, Mechanism, and Expected outcome. Write as if you are preparing a submission to Mozilla's security bug tracker.",
         "uses": 0,
         "crashes": 0,
     },
     "buffer_detach": {
-        "prompt": "Generate a test case targeting ARRAYBUFFER DETACHMENT: create TypedArrays backed by ArrayBuffers, then detach the buffer via postMessage transfer or WebAssembly.Memory growth while the TypedArray is being iterated. Use DataView on transferred buffers. Resize SharedArrayBuffers while Atomics operations are pending. Transfer ImageBitmap/OffscreenCanvas ownership while drawing.",
+        "prompt": "Generate a test case targeting ARRAYBUFFER DETACHMENT: create TypedArrays backed by ArrayBuffers, then detach the buffer via postMessage transfer or WebAssembly.Memory growth while the TypedArray is being iterated. Use DataView on transferred buffers. Resize SharedArrayBuffers while Atomics operations are pending. Transfer ImageBitmap/OffscreenCanvas ownership while drawing. Your output must include the top comment block naming Target, Property, Mechanism, and Expected outcome. Write as if you are preparing a submission to Mozilla's security bug tracker.",
         "uses": 0,
         "crashes": 0,
     },
     "iframe_lifecycle": {
-        "prompt": "Generate a test case targeting IFRAME DOCUMENT LIFECYCLE bugs: create iframes, access their contentDocument, then remove the iframe while still holding references to its DOM nodes, events, or Window object. Navigate iframes via src changes during load events. Call document.write on iframe documents during the parent's unload. Race iframe removal against postMessage delivery.",
+        "prompt": "Generate a test case targeting IFRAME DOCUMENT LIFECYCLE bugs: create iframes, access their contentDocument, then remove the iframe while still holding references to its DOM nodes, events, or Window object. Navigate iframes via src changes during load events. Call document.write on iframe documents during the parent's unload. Race iframe removal against postMessage delivery. Your output must include the top comment block naming Target, Property, Mechanism, and Expected outcome. Write as if you are preparing a submission to Mozilla's security bug tracker.",
         "uses": 0,
         "crashes": 0,
     },
     "web_api_native": {
-        "prompt": "Generate a test case targeting NATIVE CODE boundaries in Web APIs: close a WebGL context then call draw methods, disconnect Web Audio nodes during processing callbacks, abort IndexedDB transactions while cursors are iterating, close WebSocket/RTCPeerConnection during message delivery. These APIs have C++ implementations where the JS wrapper can outlive the native object.",
+        "prompt": "Generate a test case targeting NATIVE CODE boundaries in Web APIs: close a WebGL context then call draw methods, disconnect Web Audio nodes during processing callbacks, abort IndexedDB transactions while cursors are iterating, close WebSocket/RTCPeerConnection during message delivery. These APIs have C++ implementations where the JS wrapper can outlive the native object. Your output must include the top comment block naming Target, Property, Mechanism, and Expected outcome. Write as if you are preparing a submission to Mozilla's security bug tracker.",
         "uses": 0,
         "crashes": 0,
     },

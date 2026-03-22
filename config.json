@@ -122,5 +122,6 @@
     "subsystem_underexplored_top_n": 3,
     "history_max_turns": 6,
     "xvfb_display": ":99",
-    "use_xvfb": true
+    "use_xvfb": true,
+    "claude_code_auto_apply": false
 }

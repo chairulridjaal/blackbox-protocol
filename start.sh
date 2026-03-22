@@ -1,4 +1,5 @@
 #!/bin/bash
+source /home/ubuntu/blackbox-protocol/venv/bin/activate
 set -e
 echo "==== Blackbox Protocol — Linux Startup ===="
 
@@ -23,4 +24,11 @@ sleep 2
 echo "[4/4] Starting fuzzer..."
 echo "      Press Ctrl+C to stop all processes"
 trap "kill $XVFB_PID $API_PID $DASH_PID 2>/dev/null; echo 'Stopped.'" EXIT
-python3 main.py
+mkdir -p logs
+if [ -f logs/fuzzer.log ] && \
+   [ $(stat -c%s logs/fuzzer.log 2>/dev/null || echo 0) \
+     -gt 52428800 ]; then
+  mv logs/fuzzer.log logs/fuzzer.$(date +%Y%m%d_%H%M%S).log
+  echo "Log rotated" > logs/fuzzer.log
+fi
+python3 main.py 2>&1 | tee -a logs/fuzzer.log

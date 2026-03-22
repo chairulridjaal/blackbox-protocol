@@ -16,6 +16,7 @@ AI-powered Firefox browser fuzzer that uses Claude LLM to generate intelligent t
 - [Fuzzing Strategies](#fuzzing-strategies)
 - [Crash Output](#crash-output)
 - [Project Structure](#project-structure)
+- [Monitoring & Watcher](#monitoring--watcher)
 - [Troubleshooting](#troubleshooting)
 - [License](#license)
 
@@ -33,6 +34,8 @@ AI-powered Firefox browser fuzzer that uses Claude LLM to generate intelligent t
 - **Severity Filtering** -- Configurable minimum severity threshold skips low-value findings (timeouts, minor errors)
 - **Web Dashboard** -- React-based UI with filtering, search, sorting, bulk actions, and real-time crash triage
 - **REST API** -- FastAPI backend for crash management, bulk operations, and statistics
+- **Automated Monitoring** -- `watch.py` runs on cron, analyzes performance via Claude, applies safe config fixes, and sends Telegram status updates
+- **Claude Code Auto-Apply** -- Optionally invokes Claude Code to apply suggested code changes and restarts the fuzzer automatically
 
 ## Architecture
 
@@ -68,6 +71,13 @@ AI-powered Firefox browser fuzzer that uses Claude LLM to generate intelligent t
               |           |
            api.py    dashboard/
           (REST)     (React UI)
+
+
+   +-----------------------------------------------------------+
+   |                      watch.py  (cron)                      |
+   |  collects metrics → Claude analysis → auto-fix config     |
+   |  → Telegram alerts → Claude Code apply (optional)         |
+   +-----------------------------------------------------------+
 ```
 
 ## Prerequisites
@@ -76,6 +86,7 @@ AI-powered Firefox browser fuzzer that uses Claude LLM to generate intelligent t
 - **Node.js 18+** and npm (for the dashboard)
 - **Firefox** installed locally (ASan build recommended)
 - **Anthropic API key** (or a compatible proxy endpoint)
+- **Claude Code** (optional, for autonomous fix application via `watch.py`)
 
 ## Installation
 
@@ -89,6 +100,8 @@ cd blackbox-protocol
 ### 2. Install Python dependencies
 
 ```bash
+python3 -m venv venv
+source venv/bin/activate  # or venv\Scripts\activate on Windows
 pip install -r requirements.txt
 ```
 
@@ -107,7 +120,13 @@ Create a `.env` file in the project root:
 ```env
 ANTHROPIC_API_KEY=sk-your-api-key-here
 ANTHROPIC_BASE_URL=https://api.anthropic.com
+TELEGRAM_BOT_TOKEN=your-bot-token
+TELEGRAM_CHAT_ID=your-chat-id
 ```
+
+To get Telegram credentials:
+- **Bot token** -- Message `@BotFather` on Telegram, run `/newbot`
+- **Chat ID** -- Message `@userinfobot` on Telegram, run `/start`
 
 ### 5. Set the Firefox path
 
@@ -130,14 +149,14 @@ For best results, use an **ASan (AddressSanitizer) build** of Firefox. Install w
 
 ```bash
 pip install fuzzfetch
-fuzzfetch --asan -o ~/firefox-asan
+fuzzfetch --asan --fuzzing -n firefox-asan
 ```
 
 Then set:
 
 ```json
 {
-  "firefox_path": "/home/your-user/firefox-asan/firefox/firefox"
+  "firefox_path": "/home/your-user/firefox-asan/firefox"
 }
 ```
 
@@ -163,6 +182,7 @@ All settings live in `config.json`:
 | `use_xvfb`                      | `true`      | Use virtual display on Linux (headless)                                     |
 | `xvfb_display`                  | `":99"`     | Xvfb display number                                                         |
 | `auto_open_dashboard`           | `false`     | Auto-open dashboard in browser on start                                     |
+| `claude_code_auto_apply`        | `false`     | Let `watch.py` invoke Claude Code to apply suggested code changes           |
 
 ### Severity filtering
 
@@ -227,13 +247,15 @@ Press `Ctrl+C` to stop the fuzzer gracefully.
 # Install Xvfb for headless display
 sudo apt install xvfb
 
-# Start virtual display
-Xvfb :99 &
-export DISPLAY=:99
-
-# Run the fuzzer
-python main.py
+# Run everything via start.sh (activates venv, starts Xvfb, API, dashboard, fuzzer)
+./start.sh
 ```
+
+`start.sh` automatically:
+- Activates the Python virtual environment
+- Starts Xvfb, the API server, and the dashboard
+- Rotates `logs/fuzzer.log` if it exceeds 50 MB
+- Pipes all fuzzer output to `logs/fuzzer.log` via `tee`
 
 ### Output
 
@@ -402,11 +424,13 @@ crashes/
 blackbox-protocol/
 ├── main.py                    # Entry point -- loads config, spawns workers
 ├── worker.py                  # Fuzzing loop for each worker thread
+├── watch.py                   # Monitoring tool -- metrics, Claude analysis, Telegram alerts
 ├── api.py                     # FastAPI REST server for crash management
 ├── config.json                # All tunable parameters
 ├── requirements.txt           # Python dependencies
+├── start.sh                   # Linux launcher (venv, Xvfb, log rotation, tee)
 ├── start.bat                  # Windows one-click launcher
-├── .env                       # API credentials (not committed)
+├── .env                       # API + Telegram credentials (not committed)
 │
 ├── modules/                   # Core fuzzing engine
 │   ├── browser.py             # Firefox process management
@@ -429,6 +453,14 @@ blackbox-protocol/
 │           ├── CrashList.jsx  # Crash table with filters, search, bulk actions
 │           ├── CrashDetail.jsx# Detailed crash view with delete
 │           └── Stats.jsx      # Statistics, strategy charts, subsystem coverage
+│
+├── logs/                      # Runtime logs (created automatically)
+│   ├── fuzzer.log             # Main fuzzer output (via tee from start.sh)
+│   ├── watcher.log            # watch.py run summaries
+│   ├── auto_fixes.log         # Config changes applied by watch.py
+│   ├── claude_code_runs.log   # Claude Code invocation output
+│   ├── restarts.log           # Fuzzer restart history
+│   └── suggestions_*.txt      # Full Claude analysis JSON per run
 │
 └── crashes/                   # Output directory (per-crash subdirectories)
     └── {crash_id}/
@@ -459,6 +491,65 @@ The fuzzer monitors coverage across these Firefox subsystems and prioritizes und
 | Intersection_Observer | Intersection Observer API         |
 | Service_Worker        | Service Worker lifecycle          |
 | WebSockets            | WebSocket connections             |
+
+## Monitoring & Watcher
+
+`watch.py` is a standalone monitoring tool designed to run on a cron schedule. It collects fuzzer metrics, sends them to Claude for analysis, applies safe config changes automatically, and sends Telegram notifications with status updates.
+
+The fuzzer's test generation is tuned for professional security research quality:
+- **CVE-quality system prompt** -- Test cases are framed as Mozilla bug bounty PoC reproducers, each requiring a structured `Target/Property/Mechanism/Expected` comment block that a Gecko C++ engineer can immediately triage
+- **Strategy-level enforcement** -- All 7 UCB1 strategies instruct the model to write as if preparing a submission to Mozilla's security bug tracker
+
+### What it does
+
+1. **Collects data** -- last 200 lines of `logs/fuzzer.log`, recent crash summaries, crash counts by severity/strategy/subsystem, timeout and novelty skip rates, current config and strategies
+2. **Calls Claude** (Opus) -- sends all metrics for performance analysis, receives structured JSON with health assessment, auto-fixes, manual fix suggestions, and red flags
+3. **Applies auto-fixes** -- safe config.json changes (e.g. adjusting `timeout_seconds`, adding keywords) are applied immediately and logged to `logs/auto_fixes.log`
+4. **Sends Telegram** -- status message, attention items (if any), and urgent alerts for critical health
+5. **Claude Code auto-apply** (optional) -- if `claude_code_auto_apply` is `true` in config.json, invokes Claude Code to apply suggested code changes and restarts the fuzzer
+
+### Setup
+
+```bash
+# Set up the cron job (runs every 2 hours)
+crontab -e
+
+# Add this line:
+0 */2 * * * cd /home/ubuntu/blackbox-protocol && /home/ubuntu/blackbox-protocol/venv/bin/python3 watch.py >> logs/watcher.log 2>&1
+```
+
+### Test manually
+
+```bash
+source venv/bin/activate && python3 watch.py
+```
+
+### Logs
+
+| File | Contents |
+|---|---|
+| `logs/watcher.log` | One-line summary per run (health, fix counts, crash count) |
+| `logs/auto_fixes.log` | Every auto-applied config change with timestamp |
+| `logs/suggestions_*.txt` | Full Claude JSON response per run |
+| `logs/claude_code_runs.log` | Claude Code invocation output (if enabled) |
+| `logs/restarts.log` | Fuzzer restart timestamps |
+
+### Claude Code auto-apply
+
+When `claude_code_auto_apply` is set to `true` in `config.json`, `watch.py` will:
+
+1. Invoke `claude --print --dangerously-skip-permissions` with the manual fix instructions
+2. Log all output to `logs/claude_code_runs.log`
+3. Restart the fuzzer via tmux (`kill-session` + `new-session`)
+4. Send a Telegram notification with the result
+
+This is disabled by default. Enable it only after verifying the watcher produces sensible suggestions:
+
+```json
+{
+  "claude_code_auto_apply": true
+}
+```
 
 ## Troubleshooting
 
@@ -496,7 +587,7 @@ The fuzzer handles this automatically when `use_xvfb: true` in `config.json`.
 
 ### No crashes detected
 
-- Use an **ASan build** of Firefox (`pip install fuzzfetch && fuzzfetch --asan -o ~/firefox-asan`)
+- Use an **ASan build** of Firefox (`pip install fuzzfetch && fuzzfetch --asan --fuzzing -n firefox-asan`)
 - Lower `novelty_threshold` (e.g., `0.75`) to allow more test case variations
 - Increase `workers` for higher throughput
 - Decrease `delay_between_tests` if your API rate limit allows
