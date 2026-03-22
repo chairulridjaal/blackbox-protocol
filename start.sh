@@ -21,14 +21,7 @@ DASH_PID=$!
 cd ..
 sleep 2
 
-echo "[4/4] Starting fuzzer..."
-echo "      Press Ctrl+C to stop all processes"
-trap "kill $XVFB_PID $API_PID $DASH_PID 2>/dev/null; echo 'Stopped.'" EXIT
-mkdir -p logs
-if [ -f logs/fuzzer.log ] && \
-   [ $(stat -c%s logs/fuzzer.log 2>/dev/null || echo 0) \
-     -gt 52428800 ]; then
-  mv logs/fuzzer.log logs/fuzzer.$(date +%Y%m%d_%H%M%S).log
-  echo "Log rotated" > logs/fuzzer.log
-fi
-python3 main.py 2>&1 | tee -a logs/fuzzer.log
+echo ""
+echo "==== Ready! Now run in a new tmux window: ===="
+echo "cd ~/blackbox-protocol && source venv/bin/activate && python3 main.py 2>&1 | tee -a logs/fuzzer.log"
+echo ""
