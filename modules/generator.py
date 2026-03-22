@@ -1,4 +1,5 @@
 import math
+import threading
 from utils.html_utils import extract_html
 
 GENERATION_MODEL = "claude-sonnet-4.6"
@@ -24,7 +25,35 @@ Critical patterns that find real vulnerabilities:
 
 DO NOT generate test cases that merely create deep nesting or layout thrashing — those only cause timeouts, which are low-value DoS. Focus on patterns that corrupt memory.
 
-Always output raw HTML only. No markdown, no code fences, no explanations outside of HTML comments."""
+Always output raw HTML only. No markdown, no code fences, no explanations outside of HTML comments.
+
+---CONCRETE VULNERABILITY PATTERNS---
+
+Example 1 — DOM Use-After-Free pattern:
+  let el = document.createElement('div');
+  document.body.appendChild(el);
+  let observer = new MutationObserver(() => el.getBoundingClientRect());
+  observer.observe(document.body, {childList: true});
+  el.remove();
+  document.body.offsetHeight; // force layout on freed element
+
+Example 2 — JIT bounds check elimination pattern:
+  function jitTarget(arr, i) {
+    // Mix types to trigger deoptimization
+    return arr[((i + 0x7ffffff0) | 0) % arr.length];
+  }
+  const arr = new Array(100).fill(0);
+  for (let i = 0; i < 100000; i++) jitTarget(arr, i); // heat up JIT
+
+Example 3 — GC + active reference pattern:
+  let refs = [];
+  for (let i = 0; i < 10000; i++) refs.push(document.createElement('span'));
+  refs.forEach(el => document.body.appendChild(el));
+  window.gc?.(); // trigger GC if available
+  refs.forEach(el => el.getBoundingClientRect()); // access after GC
+
+Always use these patterns as inspiration, not templates. Mutate, combine,
+and push them to extremes."""
 
 STRATEGIES = {
     "use_after_free": {
@@ -64,6 +93,8 @@ STRATEGIES = {
     },
 }
 
+_strategy_lock = threading.Lock()
+
 
 def select_strategy() -> tuple:
     """Select a strategy using UCB1 multi-armed bandit algorithm."""
@@ -86,10 +117,11 @@ def select_strategy() -> tuple:
 
 def record_result(strategy_name: str, found_crash: bool):
     """Update strategy stats after a test run."""
-    if strategy_name in STRATEGIES:
-        STRATEGIES[strategy_name]["uses"] += 1
-        if found_crash:
-            STRATEGIES[strategy_name]["crashes"] += 1
+    with _strategy_lock:
+        if strategy_name in STRATEGIES:
+            STRATEGIES[strategy_name]["uses"] += 1
+            if found_crash:
+                STRATEGIES[strategy_name]["crashes"] += 1
 
 
 def generate_test_case(client, history, strategy_name, strategy_prompt, subsystem_hint=None):
@@ -106,7 +138,11 @@ def generate_test_case(client, history, strategy_name, strategy_prompt, subsyste
     response = client.messages.create(
         model=GENERATION_MODEL,
         max_tokens=16384,
-        system=SYSTEM_PROMPT,
+        system=[{
+            "type": "text",
+            "text": SYSTEM_PROMPT,
+            "cache_control": {"type": "ephemeral"}
+        }],
         messages=messages
     )
     elapsed = __import__('time').time() - t0

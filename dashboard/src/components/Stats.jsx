@@ -1,5 +1,5 @@
 import { cn } from '../lib/utils'
-import { Bug, ShieldAlert, CheckCircle2, Clock, Activity } from 'lucide-react'
+import { Bug, ShieldAlert, CheckCircle2, Clock, Activity, Server } from 'lucide-react'
 
 const severityColors = {
   1: 'bg-zinc-100 dark:bg-zinc-500/20 text-zinc-600 dark:text-zinc-400 border-zinc-200 dark:border-zinc-500/20',
@@ -92,6 +92,60 @@ export default function Stats({ stats }) {
           ))}
         </div>
       </div>
+
+      {/* Strategy Effectiveness */}
+      {stats.by_strategy && Object.keys(stats.by_strategy).length > 0 && (
+        <div className="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950/50 p-6 shadow-sm">
+          <h3 className="tracking-tight text-sm font-medium text-zinc-600 dark:text-zinc-400 flex items-center gap-2 mb-4">
+            <Activity className="w-4 h-4" />
+            Strategy Effectiveness
+          </h3>
+          <div className="space-y-3">
+            {Object.entries(stats.by_strategy)
+              .sort(([, a], [, b]) => b.total - a.total)
+              .map(([name, data]) => {
+                const maxTotal = Math.max(...Object.values(stats.by_strategy).map(s => s.total))
+                const widthPercent = maxTotal > 0 ? (data.total / maxTotal) * 100 : 0
+                const highSev = (data.by_severity['5'] || 0) + (data.by_severity['4'] || 0)
+                return (
+                  <div key={name} className="flex items-center gap-3">
+                    <span className="text-xs font-mono text-zinc-600 dark:text-zinc-400 w-36 truncate shrink-0" title={name}>{name}</span>
+                    <div className="flex-1 h-6 bg-zinc-100 dark:bg-zinc-800 rounded-md overflow-hidden">
+                      <div
+                        className="h-full bg-orange-500/80 dark:bg-orange-500/60 rounded-md transition-all"
+                        style={{ width: `${widthPercent}%` }}
+                      />
+                    </div>
+                    <span className="text-xs text-zinc-500 w-12 text-right shrink-0">{data.total}</span>
+                    {highSev > 0 && (
+                      <span className="text-xs text-red-500 font-medium shrink-0">{highSev} high</span>
+                    )}
+                  </div>
+                )
+              })}
+          </div>
+        </div>
+      )}
+
+      {/* Subsystem Coverage */}
+      {stats.by_subsystem && Object.keys(stats.by_subsystem).length > 0 && (
+        <div className="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950/50 p-6 shadow-sm">
+          <h3 className="tracking-tight text-sm font-medium text-zinc-600 dark:text-zinc-400 flex items-center gap-2 mb-4">
+            <Server className="w-4 h-4" />
+            Subsystem Coverage
+          </h3>
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2">
+            {Object.entries(stats.by_subsystem)
+              .sort(([, a], [, b]) => b - a)
+              .map(([name, count]) => (
+                <div key={name} className="p-3 rounded-lg bg-zinc-50 dark:bg-zinc-900/50 border border-zinc-100 dark:border-zinc-800/50 text-center">
+                  <div className="text-lg font-semibold text-zinc-900 dark:text-zinc-200">{count}</div>
+                  <div className="text-[10px] font-mono text-zinc-500 truncate" title={name}>{name}</div>
+                </div>
+              ))}
+          </div>
+        </div>
+      )}
     </div>
   )
 }

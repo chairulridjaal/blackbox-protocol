@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom'
 import axios from 'axios'
 import { format } from 'date-fns'
 import { cn } from '../lib/utils'
-import { ArrowLeft, Copy, CheckCircle2, FileJson, XCircle, Activity, Server, Hash, Clock } from 'lucide-react'
+import { ArrowLeft, Copy, CheckCircle2, FileJson, XCircle, Activity, Server, Hash, Clock, Trash2 } from 'lucide-react'
 
 const severityColors = {
   1: 'bg-zinc-100 dark:bg-zinc-500/20 text-zinc-600 dark:text-zinc-400 border-zinc-200 dark:border-zinc-500/20',
@@ -21,13 +21,14 @@ const severityLabels = {
   5: 'Critical',
 }
 
-export default function CrashDetail({ onUpdateStatus }) {
+export default function CrashDetail({ onUpdateStatus, onDelete }) {
   const { crashId } = useParams()
   const navigate = useNavigate()
   const [crash, setCrash] = useState(null)
   const [loading, setLoading] = useState(true)
   const [activeTab, setActiveTab] = useState('report')
   const [copied, setCopied] = useState(false)
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
 
   useEffect(() => {
     const fetchCrash = async () => {
@@ -127,6 +128,13 @@ export default function CrashDetail({ onUpdateStatus }) {
           >
             <XCircle className="w-4 h-4" /> Ignore
           </button>
+          <div className="w-px h-5 bg-zinc-200 dark:bg-zinc-800 mx-1" />
+          <button
+            onClick={() => setShowDeleteConfirm(true)}
+            className="inline-flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-colors border bg-white dark:bg-zinc-900 text-red-600 dark:text-red-400 border-zinc-200 dark:border-zinc-800 hover:bg-red-50 dark:hover:bg-red-500/10 hover:border-red-200 dark:hover:border-red-500/30"
+          >
+            <Trash2 className="w-4 h-4" /> Delete
+          </button>
         </div>
       </div>
 
@@ -212,6 +220,34 @@ export default function CrashDetail({ onUpdateStatus }) {
           </pre>
         </div>
       </div>
+
+      {/* Delete confirmation modal */}
+      {showDeleteConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
+          <div className="bg-white dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 p-6 max-w-sm mx-4 shadow-xl">
+            <h3 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100 mb-2">
+              Confirm Delete
+            </h3>
+            <p className="text-sm text-zinc-600 dark:text-zinc-400 mb-6">
+              Delete crash {crashId}? This will remove all artifacts and cannot be undone.
+            </p>
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={() => setShowDeleteConfirm(false)}
+                className="px-4 py-2 rounded-md text-sm font-medium text-zinc-600 dark:text-zinc-400 bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={async () => { await onDelete(crashId); navigate('/') }}
+                className="px-4 py-2 rounded-md text-sm font-medium bg-red-600 text-white hover:bg-red-700 transition-colors"
+              >
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

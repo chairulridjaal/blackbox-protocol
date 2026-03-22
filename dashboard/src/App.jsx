@@ -61,6 +61,33 @@ function App() {
     }
   }
 
+  const deleteCrash = async (crashId) => {
+    try {
+      await axios.delete(`/api/crashes/${crashId}`)
+      fetchData()
+    } catch (err) {
+      console.error('Failed to delete crash:', err)
+    }
+  }
+
+  const bulkUpdateStatus = async (crashIds, status) => {
+    try {
+      await axios.patch('/api/crashes/bulk/status', { crash_ids: crashIds, status })
+      fetchData()
+    } catch (err) {
+      console.error('Failed to bulk update:', err)
+    }
+  }
+
+  const bulkDelete = async (crashIds) => {
+    try {
+      await axios.post('/api/crashes/bulk/delete', { crash_ids: crashIds })
+      fetchData()
+    } catch (err) {
+      console.error('Failed to bulk delete:', err)
+    }
+  }
+
   return (
     <div className="min-h-screen bg-zinc-50 dark:bg-[#09090b] text-zinc-900 dark:text-zinc-50 font-sans selection:bg-orange-500/30 transition-colors duration-300">
       {/* Header */}
@@ -108,11 +135,17 @@ function App() {
             <Route path="/" element={
               <div className="space-y-8 animate-in fade-in duration-500">
                 <Stats stats={stats} />
-                <CrashList crashes={crashes} onUpdateStatus={updateCrashStatus} />
+                <CrashList
+                  crashes={crashes}
+                  onUpdateStatus={updateCrashStatus}
+                  onDelete={deleteCrash}
+                  onBulkUpdateStatus={bulkUpdateStatus}
+                  onBulkDelete={bulkDelete}
+                />
               </div>
             } />
             <Route path="/crash/:crashId" element={
-              <CrashDetail onUpdateStatus={updateCrashStatus} />
+              <CrashDetail onUpdateStatus={updateCrashStatus} onDelete={deleteCrash} />
             } />
           </Routes>
         )}

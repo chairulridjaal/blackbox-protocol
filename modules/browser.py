@@ -59,16 +59,20 @@ def launch_firefox(firefox_path, html_path, profile_dir, timeout=15, display=Non
 
     cmd = [
         firefox_path,
-        "--headless",
         "--no-remote",
         "--profile", profile_dir,
-        "--disable-gpu",
         html_path
     ]
+    if not display:
+        cmd.insert(1, "--headless")
 
     env = os.environ.copy()
     if display:
         env["DISPLAY"] = display
+    # Force sanitizer output to stderr and configure sanitizers
+    env["ASAN_OPTIONS"] = "detect_leaks=0:allocator_may_return_null=1:log_path=stderr"
+    env["UBSAN_OPTIONS"] = "print_stacktrace=1"
+    env["TSAN_OPTIONS"] = "report_bugs=1"
 
     system = platform.system()
     preexec = None

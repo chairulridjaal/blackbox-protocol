@@ -1,5 +1,6 @@
 import os
 import json
+import shutil
 from datetime import datetime
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -27,6 +28,14 @@ class StatusUpdate(BaseModel):
     status: str
     notes: Optional[str] = None
 
+class BulkStatusUpdate(BaseModel):
+    crash_ids: list[str]
+    status: str
+
+class BulkDelete(BaseModel):
+    crash_ids: list[str]
+
+
 @app.get("/api/crashes")
 def list_crashes():
     """List all crashes with metadata."""
@@ -34,31 +43,107 @@ def list_crashes():
     if not os.path.exists(CRASHES_DIR):
         return {"crashes": []}
 
-    for filename in os.listdir(CRASHES_DIR):
-        if filename.startswith("meta_") and filename.endswith(".json"):
-            meta_path = os.path.join(CRASHES_DIR, filename)
-            with open(meta_path, "r") as f:
-                meta = json.load(f)
-                crashes.append(meta)
+    for entry in os.listdir(CRASHES_DIR):
+        crash_dir = os.path.join(CRASHES_DIR, entry)
+        meta_path = os.path.join(crash_dir, "meta.json")
+        if os.path.isdir(crash_dir) and os.path.exists(meta_path):
+            try:
+                with open(meta_path, "r") as f:
+                    meta = json.load(f)
+                    crashes.append(meta)
+            except (json.JSONDecodeError, OSError):
+                continue
 
-    # Sort by timestamp descending
     crashes.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
     return {"crashes": crashes}
+
+
+@app.get("/api/stats")
+def get_stats():
+    """Get fuzzer statistics with strategy and subsystem breakdowns."""
+    crashes = list_crashes()["crashes"]
+
+    by_strategy = {}
+    for c in crashes:
+        name = c.get("strategy_name", "unknown")
+        if name not in by_strategy:
+            by_strategy[name] = {"total": 0, "by_severity": {}}
+        by_strategy[name]["total"] += 1
+        sev = str(c.get("severity", 1))
+        by_strategy[name]["by_severity"][sev] = by_strategy[name]["by_severity"].get(sev, 0) + 1
+
+    by_subsystem = {}
+    for c in crashes:
+        sub = c.get("subsystem", "unknown")
+        by_subsystem[sub] = by_subsystem.get(sub, 0) + 1
+
+    stats = {
+        "total": len(crashes),
+        "new": sum(1 for c in crashes if c.get("status") == "new"),
+        "verified": sum(1 for c in crashes if c.get("status") == "verified"),
+        "ignored": sum(1 for c in crashes if c.get("status") == "ignored"),
+        "submitted": sum(1 for c in crashes if c.get("status") == "submitted"),
+        "by_severity": {i: sum(1 for c in crashes if c.get("severity") == i) for i in range(1, 6)},
+        "by_strategy": by_strategy,
+        "by_subsystem": by_subsystem,
+    }
+    return stats
+
+
+# Bulk routes MUST be defined before /{crash_id} routes
+@app.patch("/api/crashes/bulk/status")
+def bulk_update_status(update: BulkStatusUpdate):
+    """Update status for multiple crashes at once."""
+    updated = []
+    errors = []
+    for crash_id in update.crash_ids:
+        crash_id = os.path.basename(crash_id)
+        crash_dir = os.path.join(CRASHES_DIR, crash_id)
+        meta_path = os.path.join(crash_dir, "meta.json")
+        if not os.path.exists(meta_path):
+            errors.append(crash_id)
+            continue
+        with open(meta_path, "r") as f:
+            meta = json.load(f)
+        meta["status"] = update.status
+        meta["updated_at"] = datetime.now().isoformat()
+        with open(meta_path, "w") as f:
+            json.dump(meta, f, indent=2)
+        updated.append(crash_id)
+    return {"success": True, "updated": updated, "errors": errors}
+
+
+@app.post("/api/crashes/bulk/delete")
+def bulk_delete(request: BulkDelete):
+    """Delete multiple crashes at once."""
+    deleted = []
+    errors = []
+    for crash_id in request.crash_ids:
+        crash_id = os.path.basename(crash_id)
+        crash_dir = os.path.join(CRASHES_DIR, crash_id)
+        if not os.path.isdir(crash_dir):
+            errors.append(crash_id)
+            continue
+        shutil.rmtree(crash_dir)
+        deleted.append(crash_id)
+    return {"success": True, "deleted": deleted, "errors": errors}
+
 
 @app.get("/api/crashes/{crash_id}")
 def get_crash(crash_id: str):
     """Get full crash details including file contents."""
-    meta_path = os.path.join(CRASHES_DIR, f"meta_{crash_id}.json")
+    crash_id = os.path.basename(crash_id)
+    crash_dir = os.path.join(CRASHES_DIR, crash_id)
+    meta_path = os.path.join(crash_dir, "meta.json")
     if not os.path.exists(meta_path):
         raise HTTPException(status_code=404, detail="Crash not found")
 
     with open(meta_path, "r") as f:
         meta = json.load(f)
 
-    # Load file contents
-    html_path = os.path.join(CRASHES_DIR, meta["html_file"])
-    report_path = os.path.join(CRASHES_DIR, meta["report_file"])
-    original_path = os.path.join(CRASHES_DIR, meta.get("original_file", ""))
+    html_path = os.path.join(crash_dir, meta["html_file"])
+    report_path = os.path.join(crash_dir, meta["report_file"])
+    original_path = os.path.join(crash_dir, meta.get("original_file", ""))
 
     html_content = ""
     report_content = ""
@@ -83,10 +168,13 @@ def get_crash(crash_id: str):
         "original": original_content
     }
 
+
 @app.patch("/api/crashes/{crash_id}")
 def update_crash(crash_id: str, update: StatusUpdate):
     """Update crash status."""
-    meta_path = os.path.join(CRASHES_DIR, f"meta_{crash_id}.json")
+    crash_id = os.path.basename(crash_id)
+    crash_dir = os.path.join(CRASHES_DIR, crash_id)
+    meta_path = os.path.join(crash_dir, "meta.json")
     if not os.path.exists(meta_path):
         raise HTTPException(status_code=404, detail="Crash not found")
 
@@ -103,20 +191,18 @@ def update_crash(crash_id: str, update: StatusUpdate):
 
     return {"success": True, "meta": meta}
 
-@app.get("/api/stats")
-def get_stats():
-    """Get fuzzer statistics."""
-    crashes = list_crashes()["crashes"]
 
-    stats = {
-        "total": len(crashes),
-        "new": sum(1 for c in crashes if c.get("status") == "new"),
-        "verified": sum(1 for c in crashes if c.get("status") == "verified"),
-        "ignored": sum(1 for c in crashes if c.get("status") == "ignored"),
-        "submitted": sum(1 for c in crashes if c.get("status") == "submitted"),
-        "by_severity": {i: sum(1 for c in crashes if c.get("severity") == i) for i in range(1, 6)}
-    }
-    return stats
+@app.delete("/api/crashes/{crash_id}")
+def delete_crash(crash_id: str):
+    """Delete a crash and all its artifacts."""
+    crash_id = os.path.basename(crash_id)
+    crash_dir = os.path.join(CRASHES_DIR, crash_id)
+    if not os.path.isdir(crash_dir):
+        raise HTTPException(status_code=404, detail="Crash not found")
+
+    shutil.rmtree(crash_dir)
+    return {"success": True, "deleted": crash_id}
+
 
 if __name__ == "__main__":
     import uvicorn

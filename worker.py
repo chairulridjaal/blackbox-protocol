@@ -10,10 +10,8 @@ from modules.plateau_detector import PlateauDetector
 from modules.storage import save_crash
 from utils.html_utils import extract_html
 
-MAX_HISTORY_TURNS = 6
 
-
-def worker_loop(worker_id, config, shared_dedup=None):
+def worker_loop(worker_id, config, shared_dedup=None, firefox_version="unknown"):
     """Main fuzzing loop for a single worker."""
     client = Anthropic(
         api_key=config["api_key"],
@@ -32,6 +30,7 @@ def worker_loop(worker_id, config, shared_dedup=None):
         threshold=config.get("plateau_threshold", 0.05)
     )
     deduplicator = shared_dedup or CrashDeduplicator()
+    max_history_turns = config.get("history_max_turns", 6)
 
     history = [
         {"role": "user", "content": "I need you to generate browser fuzzing test cases for Firefox. Start with something that targets the HTML5 parser with malformed nested structures."},
@@ -67,7 +66,7 @@ def worker_loop(worker_id, config, shared_dedup=None):
                 print(f"[Worker {worker_id}] Plateau detected! Injecting diversity prompt...")
 
             # Build combined prompt with context and plateau if needed
-            combined_prompt = strategy_prompt
+            combined_prompt = context_str + "\n\n" + strategy_prompt
             if plateau_prompt:
                 combined_prompt = plateau_prompt + "\n\n" + combined_prompt
 
@@ -116,7 +115,15 @@ def worker_loop(worker_id, config, shared_dedup=None):
 
             # 14. Handle issue
             if is_issue:
-                # 14a. Deduplication check
+                # 14a. Skip low-severity findings (timeouts, minor errors)
+                min_severity = config.get("min_save_severity", 3)
+                if severity < min_severity:
+                    print(f"[W{worker_id} | T#{test_count} | strategy:{strategy_name} | subsystem:{current_subsystem} | novelty:{score:.2f}] → {issue_reason} sev:{severity} (below threshold {min_severity}, skipped)")
+                    record_result(strategy_name, found_crash=False)
+                    plateau_detector.update(False)
+                    continue
+
+                # 14b. Deduplication check
                 is_dup, signature = deduplicator.is_duplicate(run_result["output"], issue_reason, config["crashes_dir"])
                 if is_dup:
                     print(f"[W{worker_id} | T#{test_count} | strategy:{strategy_name} | subsystem:{current_subsystem} | novelty:{score:.2f}] → DUP (sig:{signature[:8]})")
@@ -126,30 +133,30 @@ def worker_loop(worker_id, config, shared_dedup=None):
                 print(f"[W{worker_id} | T#{test_count} | strategy:{strategy_name} | subsystem:{current_subsystem} | novelty:{score:.2f}] → CRASH sev:{severity} sig:{signature[:8]}")
 
                 try:
-                    # 14b. Minimize
+                    # 14c. Minimize
                     minimized = minimize_test_case(client, html_content, issue_reason, run_result["output"])
 
-                    # 14c. Generate report
+                    # 14d. Generate report
                     report = generate_report(client, html_content, minimized, issue_reason, run_result["output"], severity)
 
-                    # 14d. Save crash
+                    # 14e. Save crash
                     crash_id, html_path, report_path = save_crash(
                         minimized, report, html_content, run_result["output"],
                         issue_reason, severity, signature, strategy_name,
                         current_subsystem, worker_id, test_count,
-                        config["crashes_dir"], novelty_skips
+                        config["crashes_dir"], novelty_skips, firefox_version
                     )
 
                     print(f"  Crash ID: {crash_id}")
                     print(f"  Files saved to {config['crashes_dir']}/")
 
-                    # 14e. Record crash for strategy
+                    # 14f. Record crash for strategy
                     record_result(strategy_name, found_crash=True)
 
-                    # 14f. Record crash for subsystem
+                    # 14g. Record crash for subsystem
                     tracker.record_crash(current_subsystem)
 
-                    # 14g. Inject success feedback
+                    # 14h. Inject success feedback
                     history.append({
                         "role": "user",
                         "content": f"Excellent! That last test case triggered a {issue_reason} (severity {severity}/5). Generate an aggressive VARIANT that might trigger something similar or worse. Mutate it aggressively."
@@ -164,8 +171,8 @@ def worker_loop(worker_id, config, shared_dedup=None):
                 record_result(strategy_name, found_crash=False)
 
             # 16. History trimming — keep first message + most recent turns
-            if len(history) > MAX_HISTORY_TURNS * 2:
-                history = history[:1] + history[-(MAX_HISTORY_TURNS * 2 - 1):]
+            if len(history) > max_history_turns * 2:
+                history = history[:1] + history[-(max_history_turns * 2 - 1):]
 
         except Exception as e:
             import traceback

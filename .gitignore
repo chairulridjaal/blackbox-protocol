@@ -24,6 +24,7 @@ dashboard/node_modules/
 
 # Claude Code
 .claude/
+plans/
 
 # Environment / secrets
 .env

@@ -2,6 +2,7 @@ import os
 import sys
 import json
 import signal
+import subprocess
 from dotenv import load_dotenv
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from modules.browser import kill_stale_processes
@@ -44,12 +45,23 @@ def main():
     """Entry point — load config, clean up, and spawn workers."""
     config = load_config()
 
+    # Capture Firefox version
+    try:
+        result = subprocess.run(
+            [config["firefox_path"], "--version"],
+            capture_output=True, text=True, timeout=10
+        )
+        firefox_version = result.stdout.strip() or "unknown"
+    except Exception:
+        firefox_version = "unknown"
+
     print("=" * 60)
     print("FIREFOX FUZZER - Modular Edition")
     print("=" * 60)
     print(f"Workers: {config['workers']}")
+    print(f"Firefox: {firefox_version}")
     print(f"Crashes dir: {os.path.abspath(config['crashes_dir'])}")
-    print(f"Dashboard: http://localhost:{config.get('dashboard_port', 5173)}")
+    print(f"Dashboard: http://localhost:{config.get('dashboard_port', 6868)}")
     print(f"Novelty threshold: {config.get('novelty_threshold', 0.85)}")
     print(f"Plateau window: {config.get('plateau_window', 20)}")
     print(f"API base URL: {config['base_url']}")
@@ -82,10 +94,10 @@ def main():
     shared_dedup = CrashDeduplicator()
 
     if config["workers"] == 1:
-        worker_loop(1, config, shared_dedup)
+        worker_loop(1, config, shared_dedup, firefox_version)
     else:
         with ThreadPoolExecutor(max_workers=config["workers"]) as executor:
-            futures = [executor.submit(worker_loop, i + 1, config, shared_dedup) for i in range(config["workers"])]
+            futures = [executor.submit(worker_loop, i + 1, config, shared_dedup, firefox_version) for i in range(config["workers"])]
             try:
                 for future in as_completed(futures):
                     future.result()

@@ -30,8 +30,9 @@ AI-powered Firefox browser fuzzer that uses Claude LLM to generate intelligent t
 - **Automated Crash Minimization** -- Uses Claude to reduce crashing test cases to minimal reproducers
 - **Bug Report Generation** -- Produces Bugzilla-ready reports with root cause analysis
 - **Crash Deduplication** -- MD5-based stack trace normalization prevents duplicate reports
-- **Web Dashboard** -- React-based UI for real-time crash visualization and triage
-- **REST API** -- FastAPI backend for crash management and statistics
+- **Severity Filtering** -- Configurable minimum severity threshold skips low-value findings (timeouts, minor errors)
+- **Web Dashboard** -- React-based UI with filtering, search, sorting, bulk actions, and real-time crash triage
+- **REST API** -- FastAPI backend for crash management, bulk operations, and statistics
 
 ## Architecture
 
@@ -73,7 +74,7 @@ AI-powered Firefox browser fuzzer that uses Claude LLM to generate intelligent t
 
 - **Python 3.10+**
 - **Node.js 18+** and npm (for the dashboard)
-- **Firefox** installed locally
+- **Firefox** installed locally (ASan build recommended)
 - **Anthropic API key** (or a compatible proxy endpoint)
 
 ## Installation
@@ -114,7 +115,7 @@ Edit `config.json` and set `firefox_path` to your Firefox binary:
 
 ```json
 {
-    "firefox_path": "C:/Program Files/Mozilla Firefox/firefox.exe"
+  "firefox_path": "C:/Program Files/Mozilla Firefox/firefox.exe"
 }
 ```
 
@@ -125,29 +126,54 @@ Common paths:
 | macOS | `/Applications/Firefox.app/Contents/MacOS/firefox` |
 | Linux | `/usr/bin/firefox` |
 
-For best results, use a **Firefox debug build** or an **ASan (AddressSanitizer) build** to catch memory corruption bugs that would silently pass in release builds.
+For best results, use an **ASan (AddressSanitizer) build** of Firefox. Install with [fuzzfetch](https://github.com/MozillaSecurity/fuzzfetch):
+
+```bash
+pip install fuzzfetch
+fuzzfetch --asan -o ~/firefox-asan
+```
+
+Then set:
+
+```json
+{
+  "firefox_path": "/home/your-user/firefox-asan/firefox/firefox"
+}
+```
 
 ## Configuration
 
 All settings live in `config.json`:
 
-| Key | Default | Description |
-|---|---|---|
-| `workers` | `2` | Number of parallel fuzzing workers |
-| `timeout_seconds` | `30` | Max time Firefox runs per test case |
-| `delay_between_tests` | `180` | Seconds between test generations (rate limiting) |
-| `api_port` | `6767` | REST API server port |
-| `dashboard_port` | `5173` | Vite dev server port |
-| `crashes_dir` | `"crashes"` | Output directory for crash artifacts |
-| `novelty_threshold` | `0.82` | TF-IDF similarity cutoff (higher = stricter dedup) |
-| `novelty_max_corpus` | `500` | Max test cases retained for novelty comparison |
-| `plateau_window` | `20` | Sliding window size for stall detection |
-| `plateau_threshold` | `0.05` | Minimum novelty rate before diversity injection |
-| `subsystem_underexplored_top_n` | `3` | Number of underexplored subsystems to hint |
-| `history_max_turns` | `6` | LLM conversation history length |
-| `use_xvfb` | `true` | Use virtual display on Linux (headless) |
-| `xvfb_display` | `":99"` | Xvfb display number |
-| `auto_open_dashboard` | `false` | Auto-open dashboard in browser on start |
+| Key                             | Default     | Description                                                                 |
+| ------------------------------- | ----------- | --------------------------------------------------------------------------- |
+| `workers`                       | `2`         | Number of parallel fuzzing workers                                          |
+| `timeout_seconds`               | `30`        | Max time Firefox runs per test case                                         |
+| `delay_between_tests`           | `180`       | Seconds between test generations (rate limiting)                            |
+| `min_save_severity`             | `3`         | Minimum severity to save (1-5). Crashes below this are logged but not saved |
+| `api_port`                      | `6767`      | REST API server port                                                        |
+| `dashboard_port`                | `5173`      | Vite dev server port                                                        |
+| `crashes_dir`                   | `"crashes"` | Output directory for crash artifacts                                        |
+| `novelty_threshold`             | `0.82`      | TF-IDF similarity cutoff (higher = stricter dedup)                          |
+| `novelty_max_corpus`            | `500`       | Max test cases retained for novelty comparison                              |
+| `plateau_window`                | `20`        | Sliding window size for stall detection                                     |
+| `plateau_threshold`             | `0.05`      | Minimum novelty rate before diversity injection                             |
+| `subsystem_underexplored_top_n` | `3`         | Number of underexplored subsystems to hint                                  |
+| `history_max_turns`             | `6`         | LLM conversation history length                                             |
+| `use_xvfb`                      | `true`      | Use virtual display on Linux (headless)                                     |
+| `xvfb_display`                  | `":99"`     | Xvfb display number                                                         |
+| `auto_open_dashboard`           | `false`     | Auto-open dashboard in browser on start                                     |
+
+### Severity filtering
+
+Set `min_save_severity` to control which findings are saved:
+
+| Value | Saves                                                         |
+| ----- | ------------------------------------------------------------- |
+| `1`   | Everything (including timeouts)                               |
+| `3`   | Medium+ crashes, segfaults, ASan findings                     |
+| `4`   | Only segfaults and ASan findings (recommended for bug bounty) |
+| `5`   | Only ASan findings                                            |
 
 ### Crash detection keywords
 
@@ -168,28 +194,46 @@ This launches the API server, dashboard, and fuzzer in separate terminal windows
 Open three terminals:
 
 **Terminal 1 -- API Server**
+
 ```bash
 python api.py
 ```
 
 **Terminal 2 -- Dashboard**
+
 ```bash
 cd dashboard
 npm run dev
 ```
 
 **Terminal 3 -- Fuzzer**
+
 ```bash
 python main.py
 ```
 
 The fuzzer will:
+
 1. Test API connectivity
 2. Clean up stale Firefox processes
 3. Spawn worker threads
 4. Begin generating and executing test cases
 
 Press `Ctrl+C` to stop the fuzzer gracefully.
+
+### Linux Setup
+
+```bash
+# Install Xvfb for headless display
+sudo apt install xvfb
+
+# Start virtual display
+Xvfb :99 &
+export DISPLAY=:99
+
+# Run the fuzzer
+python main.py
+```
 
 ### Output
 
@@ -200,7 +244,7 @@ The fuzzer logs activity to stdout:
 FIREFOX FUZZER - Modular Edition
 ============================================================
 Workers: 2
-Crashes dir: C:\blackbox-protocol\crashes
+Crashes dir: /home/user/blackbox-protocol/crashes
 Dashboard: http://localhost:5173
 Novelty threshold: 0.82
 Plateau window: 20
@@ -217,12 +261,17 @@ Access the web dashboard at **http://localhost:5173** after starting the API and
 
 ### Features
 
-- **Stats overview** -- Total crashes, severity distribution, active strategies
-- **Crash table** -- Sortable list of all discovered crashes with severity indicators
+- **Stats overview** -- Total crashes, severity distribution, strategy effectiveness, subsystem coverage
+- **Crash table** -- Sortable, filterable list of all discovered crashes with severity indicators
+- **Filtering** -- Filter by severity level, status, strategy, and subsystem
+- **Search** -- Text search across crash IDs, issue reasons, strategies, and subsystems
+- **Sorting** -- Click column headers to sort by severity or time
+- **Bulk actions** -- Select multiple crashes for bulk status changes or deletion
+- **Delete** -- Remove crashes individually or in bulk with confirmation dialogs
 - **Crash detail view** -- Tabbed interface showing:
+  - AI-generated bug report
   - Minimized HTML reproducer
   - Original generated test case
-  - AI-generated bug report
   - Crash metadata (strategy, subsystem, severity, timestamps)
 - **Status management** -- Mark crashes as `new`, `verified`, `ignored`, or `submitted`
 - **Auto-refresh** -- Polls the API every 5 seconds for new crashes
@@ -232,14 +281,17 @@ Access the web dashboard at **http://localhost:5173** after starting the API and
 
 The REST API runs on port `6767` by default.
 
-| Method | Endpoint | Description |
-|---|---|---|
-| `GET` | `/api/crashes` | List all crashes with metadata |
-| `GET` | `/api/crashes/{crash_id}` | Get detailed crash info with file contents |
-| `PATCH` | `/api/crashes/{crash_id}` | Update crash status or notes |
-| `GET` | `/api/stats` | Summary statistics |
+| Method   | Endpoint                   | Description                                               |
+| -------- | -------------------------- | --------------------------------------------------------- |
+| `GET`    | `/api/crashes`             | List all crashes with metadata                            |
+| `GET`    | `/api/crashes/{crash_id}`  | Get detailed crash info with file contents                |
+| `PATCH`  | `/api/crashes/{crash_id}`  | Update crash status or notes                              |
+| `DELETE` | `/api/crashes/{crash_id}`  | Delete a crash and all its artifacts                      |
+| `PATCH`  | `/api/crashes/bulk/status` | Bulk update status for multiple crashes                   |
+| `POST`   | `/api/crashes/bulk/delete` | Bulk delete multiple crashes                              |
+| `GET`    | `/api/stats`               | Summary statistics with strategy and subsystem breakdowns |
 
-### Example
+### Examples
 
 ```bash
 # List all crashes
@@ -252,6 +304,19 @@ curl http://localhost:6767/api/crashes/20260322_193432_w1_t1
 curl -X PATCH http://localhost:6767/api/crashes/20260322_193432_w1_t1 \
   -H "Content-Type: application/json" \
   -d '{"status": "verified"}'
+
+# Delete a crash
+curl -X DELETE http://localhost:6767/api/crashes/20260322_193432_w1_t1
+
+# Bulk update status
+curl -X PATCH http://localhost:6767/api/crashes/bulk/status \
+  -H "Content-Type: application/json" \
+  -d '{"crash_ids": ["20260322_193432_w1_t1", "20260322_193500_w2_t3"], "status": "verified"}'
+
+# Bulk delete
+curl -X POST http://localhost:6767/api/crashes/bulk/delete \
+  -H "Content-Type: application/json" \
+  -d '{"crash_ids": ["20260322_193432_w1_t1"]}'
 ```
 
 ## How It Works
@@ -268,9 +333,10 @@ Each worker runs this cycle continuously:
 5. NOVELTY FILTER     →  TF-IDF checks similarity against past tests
 6. EXECUTE            →  Firefox loads the test case headless
 7. DETECT CRASH       →  Scan stdout/stderr for crash keywords
-8. TRIAGE             →  Deduplicate, minimize, generate report
-9. STORE              →  Save all artifacts to crashes/
-10. FEEDBACK          →  Report results back to Claude for next iteration
+8. SEVERITY CHECK     →  Skip saving if below min_save_severity threshold
+9. TRIAGE             →  Deduplicate, minimize, generate report
+10. STORE             →  Save all artifacts to crashes/{crash_id}/
+11. FEEDBACK          →  Report results back to Claude for next iteration
 ```
 
 ### Multi-Armed Bandit (UCB1)
@@ -283,46 +349,52 @@ Before executing a test case, the fuzzer computes its TF-IDF vector (using chara
 
 ### Crash Triage Pipeline
 
-When a crash is detected:
+When a crash is detected (and meets the severity threshold):
 
 1. **Deduplication** -- Normalize and hash the stack trace; skip if already seen
 2. **Minimization** -- Claude reduces the test case to the smallest reproducer
 3. **Report generation** -- Claude (Opus) writes a professional bug report with root cause analysis
-4. **Storage** -- All artifacts saved with timestamps and worker/test IDs
+4. **Storage** -- All artifacts saved in a per-crash subdirectory
 
 ## Fuzzing Strategies
 
-| Strategy | Target | Technique |
-|---|---|---|
-| `use_after_free` | DOM engine | Remove nodes, then access freed references |
-| `gc_pressure` | Garbage collector | Force GC during sensitive object operations |
-| `type_confusion` | JIT compiler | Deoptimize JIT via Proxy traps and shape transitions |
-| `layout_uaf` | Layout engine | Mutate DOM during layout/reflow callbacks |
-| `buffer_detach` | TypedArrays | Transfer ArrayBuffer ownership during reads |
-| `iframe_lifecycle` | Document lifecycle | Race conditions during iframe creation/destruction |
-| `web_api_native` | Web APIs | Use native APIs after associated objects are closed |
+| Strategy           | Target             | Technique                                            |
+| ------------------ | ------------------ | ---------------------------------------------------- |
+| `use_after_free`   | DOM engine         | Remove nodes, then access freed references           |
+| `gc_pressure`      | Garbage collector  | Force GC during sensitive object operations          |
+| `type_confusion`   | JIT compiler       | Deoptimize JIT via Proxy traps and shape transitions |
+| `layout_uaf`       | Layout engine      | Mutate DOM during layout/reflow callbacks            |
+| `buffer_detach`    | TypedArrays        | Transfer ArrayBuffer ownership during reads          |
+| `iframe_lifecycle` | Document lifecycle | Race conditions during iframe creation/destruction   |
+| `web_api_native`   | Web APIs           | Use native APIs after associated objects are closed  |
 
 ## Crash Output
 
-Each crash produces four artifacts in the `crashes/` directory:
+Each crash is saved in its own subdirectory under `crashes/`:
 
 ```
 crashes/
-├── meta_20260322_193432_w1_t1.json       # Metadata (severity, strategy, subsystem, timestamps)
-├── original_20260322_193432_w1_t1.html   # Full generated test case
-├── minimized_20260322_193432_w1_t1.html  # Minimal reproducer
-└── report_20260322_193432_w1_t1.txt      # Bugzilla-ready bug report
+├── 20260322_193432_w1_t1/
+│   ├── meta.json           # Metadata (severity, strategy, subsystem, timestamps)
+│   ├── original.html       # Full generated test case
+│   ├── minimized.html      # Minimal reproducer
+│   └── report.txt          # Bugzilla-ready bug report
+├── 20260322_193500_w2_t3/
+│   ├── meta.json
+│   ├── minimized.html
+│   ├── original.html
+│   └── report.txt
 ```
 
 ### Severity Levels
 
-| Level | Label | Trigger |
-|---|---|---|
-| 5 | Critical | AddressSanitizer findings (use-after-free, heap overflow) |
-| 4 | High | SIGSEGV, segfault, access violation |
-| 3 | Medium | Generic crashes, aborts |
-| 2 | Low | Errors, assertions |
-| 1 | Info | Timeouts (potential DoS) |
+| Level | Label    | Trigger                                                   |
+| ----- | -------- | --------------------------------------------------------- |
+| 5     | Critical | AddressSanitizer findings (use-after-free, heap overflow) |
+| 4     | High     | SIGSEGV, segfault, access violation                       |
+| 3     | Medium   | Generic crashes, aborts                                   |
+| 2     | Low      | Errors, assertions                                        |
+| 1     | Info     | Timeouts (potential DoS)                                  |
 
 ## Project Structure
 
@@ -354,34 +426,39 @@ blackbox-protocol/
 │   └── src/
 │       ├── App.jsx            # Router + layout
 │       └── components/
-│           ├── CrashList.jsx  # Crash table
-│           ├── CrashDetail.jsx# Detailed crash view
-│           └── Stats.jsx      # Summary statistics
+│           ├── CrashList.jsx  # Crash table with filters, search, bulk actions
+│           ├── CrashDetail.jsx# Detailed crash view with delete
+│           └── Stats.jsx      # Statistics, strategy charts, subsystem coverage
 │
-└── crashes/                   # Output directory (generated at runtime)
+└── crashes/                   # Output directory (per-crash subdirectories)
+    └── {crash_id}/
+        ├── meta.json          # Crash metadata
+        ├── minimized.html     # Minimized reproducer
+        ├── original.html      # Original test case
+        └── report.txt         # Bug report
 ```
 
 ## Tracked Subsystems
 
 The fuzzer monitors coverage across these Firefox subsystems and prioritizes underexplored ones:
 
-| Subsystem | Description |
-|---|---|
-| HTML5_parser | HTML parsing and DOM construction |
-| CSS_layout | Style computation and layout |
-| JS_engine | SpiderMonkey JavaScript engine |
-| SVG_renderer | SVG rendering pipeline |
-| Canvas_WebGL | Canvas 2D and WebGL contexts |
-| Web_Audio | Web Audio API processing |
-| WebRTC | Real-time communication APIs |
-| DOM_events | Event handling and dispatch |
-| IndexedDB | Client-side database |
-| WebAssembly | Wasm compilation and execution |
-| CSS_animations | CSS transitions and animations |
-| Shadow_DOM | Shadow DOM and web components |
-| Intersection_Observer | Intersection Observer API |
-| Service_Worker | Service Worker lifecycle |
-| WebSockets | WebSocket connections |
+| Subsystem             | Description                       |
+| --------------------- | --------------------------------- |
+| HTML5_parser          | HTML parsing and DOM construction |
+| CSS_layout            | Style computation and layout      |
+| JS_engine             | SpiderMonkey JavaScript engine    |
+| SVG_renderer          | SVG rendering pipeline            |
+| Canvas_WebGL          | Canvas 2D and WebGL contexts      |
+| Web_Audio             | Web Audio API processing          |
+| WebRTC                | Real-time communication APIs      |
+| DOM_events            | Event handling and dispatch       |
+| IndexedDB             | Client-side database              |
+| WebAssembly           | Wasm compilation and execution    |
+| CSS_animations        | CSS transitions and animations    |
+| Shadow_DOM            | Shadow DOM and web components     |
+| Intersection_Observer | Intersection Observer API         |
+| Service_Worker        | Service Worker lifecycle          |
+| WebSockets            | WebSocket connections             |
 
 ## Troubleshooting
 
@@ -398,9 +475,28 @@ Verify your `ANTHROPIC_BASE_URL` in `.env` is correct and the endpoint is reacha
 
 Set `firefox_path` in `config.json` to the full path of your Firefox binary. On Windows, use forward slashes: `C:/Program Files/Mozilla Firefox/firefox.exe`.
 
+### Firefox fails to start (missing libraries)
+
+On headless Linux servers, install required dependencies:
+
+```bash
+sudo apt install libgtk-3-0 libdbus-glib-1-2 libasound2 libx11-xcb1 libxt6 xvfb
+```
+
+### No DISPLAY environment variable
+
+Start Xvfb and set the display:
+
+```bash
+Xvfb :99 &
+export DISPLAY=:99
+```
+
+The fuzzer handles this automatically when `use_xvfb: true` in `config.json`.
+
 ### No crashes detected
 
-- Use a **debug or ASan build** of Firefox for better crash detection
+- Use an **ASan build** of Firefox (`pip install fuzzfetch && fuzzfetch --asan -o ~/firefox-asan`)
 - Lower `novelty_threshold` (e.g., `0.75`) to allow more test case variations
 - Increase `workers` for higher throughput
 - Decrease `delay_between_tests` if your API rate limit allows

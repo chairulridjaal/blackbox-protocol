@@ -16,18 +16,20 @@ def save_crash(
     worker_id,
     test_num,
     crashes_dir,
-    novelty_skips=0
+    novelty_skips=0,
+    firefox_version="unknown"
 ):
     """Save crash artifacts and metadata; returns (crash_id, html_path, report_path)."""
-    os.makedirs(crashes_dir, exist_ok=True)
-
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     crash_id = f"{timestamp}_w{worker_id}_t{test_num}"
 
-    html_path = os.path.join(crashes_dir, f"minimized_{crash_id}.html")
-    report_path = os.path.join(crashes_dir, f"report_{crash_id}.txt")
-    original_path = os.path.join(crashes_dir, f"original_{crash_id}.html")
-    meta_path = os.path.join(crashes_dir, f"meta_{crash_id}.json")
+    crash_subdir = os.path.join(crashes_dir, crash_id)
+    os.makedirs(crash_subdir, exist_ok=True)
+
+    html_path = os.path.join(crash_subdir, "minimized.html")
+    report_path = os.path.join(crash_subdir, "report.txt")
+    original_path = os.path.join(crash_subdir, "original.html")
+    meta_path = os.path.join(crash_subdir, "meta.json")
 
     with open(html_path, "w", encoding="utf-8") as f:
         f.write(minimized_html)
@@ -46,14 +48,15 @@ def save_crash(
         "issue_reason": issue_reason,
         "severity": severity,
         "status": "new",
-        "html_file": f"minimized_{crash_id}.html",
-        "report_file": f"report_{crash_id}.txt",
-        "original_file": f"original_{crash_id}.html",
+        "html_file": "minimized.html",
+        "report_file": "report.txt",
+        "original_file": "original.html",
         "output_snippet": run_output[:500],
         "signature": signature,
         "strategy_name": strategy_name,
         "subsystem": subsystem,
         "novelty_skips": novelty_skips,
+        "firefox_version": firefox_version,
     }
 
     with open(meta_path, "w", encoding="utf-8") as f:

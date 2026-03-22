@@ -25,16 +25,20 @@ def detect_issue(run_result: dict, config: dict) -> tuple:
     if run_result["exit_code"] != 0:
         output_lower = run_result["output"].lower()
 
-        for ignore in config.get("ignore_keywords", []):
-            if ignore.lower() in output_lower:
-                return False, None, 0
-
+        # Check for high-value sanitizer crashes FIRST
         severity = 1
         asan_keywords = config.get("asan_keywords", DEFAULT_ASAN_KEYWORDS)
-
+        is_sanitizer = False
         for keyword in asan_keywords:
             if keyword.lower() in output_lower:
                 severity = 5
+                is_sanitizer = True
+
+        # Only filter by ignore_keywords if NOT a sanitizer crash
+        if not is_sanitizer:
+            for ignore in config.get("ignore_keywords", []):
+                if ignore.lower() in output_lower:
+                    return False, None, 0
 
         for keyword in config["crash_keywords"]:
             if keyword.lower() in output_lower:
@@ -93,7 +97,7 @@ class CrashDeduplicator:
             if sig in self.seen:
                 return True, sig
             # Check filesystem
-            for meta_path in glob.glob(os.path.join(crashes_dir, "meta_*.json")):
+            for meta_path in glob.glob(os.path.join(crashes_dir, "*", "meta.json")):
                 try:
                     with open(meta_path) as f:
                         meta = json.load(f)
