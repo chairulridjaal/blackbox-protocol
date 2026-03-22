@@ -65,8 +65,14 @@ def worker_loop(worker_id, config, shared_dedup=None, firefox_version="unknown")
                 plateau_prompt = plateau_detector.get_plateau_prompt()
                 print(f"[Worker {worker_id}] Plateau detected! Injecting diversity prompt...")
 
-            # Build combined prompt with context and plateau if needed
-            combined_prompt = context_str + "\n\n" + strategy_prompt
+            # Build combined prompt with subsystem requirement FIRST
+            subsystem_target = subsystem_hint[0] if subsystem_hint else "JS_engine"
+            combined_prompt = (
+                f"REQUIRED: Your test case MUST target the {subsystem_target} "
+                f"subsystem specifically. Do not generate an HTML parser test.\n\n"
+                + context_str + "\n\n"
+                + strategy_prompt
+            )
             if plateau_prompt:
                 combined_prompt = plateau_prompt + "\n\n" + combined_prompt
 

@@ -53,7 +53,17 @@ Example 3 — GC + active reference pattern:
   refs.forEach(el => el.getBoundingClientRect()); // access after GC
 
 Always use these patterns as inspiration, not templates. Mutate, combine,
-and push them to extremes."""
+and push them to extremes.
+
+CRITICAL OUTPUT CONSTRAINTS:
+- Keep test cases under 150 lines of HTML total
+- JavaScript must complete execution within 5 seconds — no infinite loops, no unbounded recursion
+- All loops must have explicit iteration limits (max 10,000)
+- Test cases must be complete, valid, self-closing HTML documents
+- One focused attack vector per test — do not combine more than 3 techniques in a single file
+- Prefer depth over breadth: one extreme edge case beats five moderate ones
+
+These constraints ensure Firefox has time to fully process each test case within the timeout window, reaching deeper code paths than a bloated test that times out immediately."""
 
 STRATEGIES = {
     "use_after_free": {
@@ -126,10 +136,13 @@ def record_result(strategy_name: str, found_crash: bool):
 
 def generate_test_case(client, history, strategy_name, strategy_prompt, subsystem_hint=None):
     """Generate a test case using the LLM with strategy and subsystem context."""
-    user_content = strategy_prompt
+    # Build user content with subsystem targeting at the start
+    user_content = ""
     if subsystem_hint:
         hint_str = ", ".join(subsystem_hint) if isinstance(subsystem_hint, list) else subsystem_hint
-        user_content += f"\n\nFocus especially on these underexplored subsystems: {hint_str}"
+        user_content = f"[TARGET SUBSYSTEM: {hint_str}]\n\n"
+
+    user_content += strategy_prompt
 
     messages = history + [{"role": "user", "content": user_content}]
 
@@ -150,6 +163,9 @@ def generate_test_case(client, history, strategy_name, strategy_prompt, subsyste
     print(f"  [DEBUG] Response received in {elapsed:.1f}s ({len(raw_content)} chars)")
     html_content = extract_html(raw_content)
 
-    new_history = messages + [{"role": "assistant", "content": raw_content}]
+    # Create summary for history instead of storing full HTML
+    subsystem_str = subsystem_hint[0] if subsystem_hint and isinstance(subsystem_hint, list) and len(subsystem_hint) > 0 else (subsystem_hint if subsystem_hint else "unknown")
+    summary = f"[Generated {len(html_content)} char HTML targeting {subsystem_str} via {strategy_name}. Key techniques: {html_content[:200]}...]"
+    new_history = messages + [{"role": "assistant", "content": summary}]
 
     return new_history, html_content
