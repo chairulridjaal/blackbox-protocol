@@ -31,16 +31,19 @@ class SubsystemTracker:
                 self._crash_counts[subsystem] += 1
 
     def get_underexplored(self, top_n=3) -> list:
-        """Return the top_n least-explored subsystems by crash ratio."""
+        """Return the top_n least-explored subsystems by crash ratio, with test count as tiebreaker."""
         with self._lock:
             ratios = []
             for s in SUBSYSTEMS:
                 test_count = self._test_counts[s]
                 crash_hits = self._crash_counts[s]
                 ratio = crash_hits / max(test_count, 1)
-                ratios.append((s, ratio))
-            ratios.sort(key=lambda x: x[1])
-            return [s for s, _ in ratios[:top_n]]
+                # Use (ratio, test_count) tuple for sorting:
+                # - Primary: lowest crash ratio (underexplored)
+                # - Tiebreaker: fewest tests (least visited)
+                ratios.append((s, ratio, test_count))
+            ratios.sort(key=lambda x: (x[1], x[2]))
+            return [s for s, _, _ in ratios[:top_n]]
 
     def build_context_prompt(self) -> str:
         """Build a context string with coverage table and targeting instruction."""

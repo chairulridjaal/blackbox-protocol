@@ -67,9 +67,11 @@ def worker_loop(worker_id, config, shared_dedup=None, firefox_version="unknown")
 
             # Build combined prompt with subsystem requirement FIRST
             subsystem_target = subsystem_hint[0] if subsystem_hint else "JS_engine"
+            subsystem_instruction = f"REQUIRED: Your test case MUST target the {subsystem_target} subsystem specifically."
+            if subsystem_target != "HTML5_parser":
+                subsystem_instruction += " Do not generate an HTML parser test."
             combined_prompt = (
-                f"REQUIRED: Your test case MUST target the {subsystem_target} "
-                f"subsystem specifically. Do not generate an HTML parser test.\n\n"
+                subsystem_instruction + "\n\n"
                 + context_str + "\n\n"
                 + strategy_prompt
             )

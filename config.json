@@ -2,7 +2,7 @@
     "api_key": "ANTHROPIC_API_KEY",
     "base_url": "ANTHROPIC_BASE_URL",
     "_firefox_path_note": "VERIFY: run 'find ~/firefox-asan -name firefox -type f' to confirm path",
-    "firefox_path": "/home/ubuntu/firefox-asan/firefox-asan/firefox",
+    "firefox_path": "/home/ubuntu/blackbox-protocol/firefox-asan/firefox",
     "crashes_dir": "crashes",
     "workers": 2,
     "timeout_seconds": 45,
@@ -11,7 +11,6 @@
     "api_port": 6767,
     "auto_open_dashboard": false,
     "min_save_severity": 3,
-
     "crash_keywords": [
         "crash",
         "segfault",
@@ -116,14 +115,12 @@
         "glx",
         "EGL_EXT_image_dma_buf_import"
     ],
-
     "novelty_threshold": 0.82,
     "novelty_max_corpus": 500,
     "plateau_window": 20,
     "plateau_threshold": 0.05,
     "subsystem_underexplored_top_n": 3,
     "history_max_turns": 6,
-
     "xvfb_display": ":99",
     "use_xvfb": true
 }
