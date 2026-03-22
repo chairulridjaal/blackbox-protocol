@@ -1,6 +1,6 @@
 #!/bin/bash
-source /home/ubuntu/blackbox-protocol/venv/bin/activate
 set -e
+source /home/ubuntu/blackbox-protocol/venv/bin/activate
 echo "==== Blackbox Protocol — Linux Startup ===="
 
 echo "[1/4] Starting Xvfb..."
