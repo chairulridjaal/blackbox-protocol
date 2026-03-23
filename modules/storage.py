@@ -29,6 +29,7 @@ def save_crash(
     html_path = os.path.join(crash_subdir, "minimized.html")
     report_path = os.path.join(crash_subdir, "report.txt")
     original_path = os.path.join(crash_subdir, "original.html")
+    output_path = os.path.join(crash_subdir, "output.txt")
     meta_path = os.path.join(crash_subdir, "meta.json")
 
     with open(html_path, "w", encoding="utf-8") as f:
@@ -39,6 +40,10 @@ def save_crash(
 
     with open(original_path, "w", encoding="utf-8") as f:
         f.write(original_html)
+
+    # Save full raw Firefox output (ASAN traces, assertions, etc.)
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write(run_output)
 
     meta = {
         "crash_id": crash_id,
@@ -51,7 +56,7 @@ def save_crash(
         "html_file": "minimized.html",
         "report_file": "report.txt",
         "original_file": "original.html",
-        "output_snippet": run_output[:500],
+        "output_snippet": run_output[:2000],
         "signature": signature,
         "strategy_name": strategy_name,
         "subsystem": subsystem,

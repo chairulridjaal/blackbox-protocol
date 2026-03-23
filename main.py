@@ -91,13 +91,20 @@ def main():
         print(f"\nStart dashboard in another terminal.\n")
 
     from modules.crash_handler import CrashDeduplicator
+    from modules.subsystem_tracker import SubsystemTracker
+    from modules.novelty import NoveltyTracker
     shared_dedup = CrashDeduplicator()
+    shared_tracker = SubsystemTracker()
+    shared_novelty = NoveltyTracker(
+        threshold=config.get("novelty_threshold", 0.85),
+        max_corpus=config.get("novelty_max_corpus", 500)
+    )
 
     if config["workers"] == 1:
-        worker_loop(1, config, shared_dedup, firefox_version)
+        worker_loop(1, config, shared_dedup, firefox_version, shared_tracker, shared_novelty)
     else:
         with ThreadPoolExecutor(max_workers=config["workers"]) as executor:
-            futures = [executor.submit(worker_loop, i + 1, config, shared_dedup, firefox_version) for i in range(config["workers"])]
+            futures = [executor.submit(worker_loop, i + 1, config, shared_dedup, firefox_version, shared_tracker, shared_novelty) for i in range(config["workers"])]
             try:
                 for future in as_completed(futures):
                     future.result()

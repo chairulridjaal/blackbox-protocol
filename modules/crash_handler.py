@@ -13,6 +13,43 @@ DEFAULT_ASAN_KEYWORDS = [
     "stack-buffer-overflow", "SEGV", "heap corruption"
 ]
 
+# Firefox-specific assertion patterns (separate from ASAN)
+MOZ_ASSERT_KEYWORDS = [
+    "MOZ_CRASH", "MOZ_RELEASE_ASSERT", "MOZ_ASSERT",
+    "MOZ_DIAGNOSTIC_ASSERT", "NS_ASSERTION"
+]
+
+
+def _parse_scariness(output: str) -> int:
+    """Parse ASAN Scariness score from output (0-100). Returns 0 if not found."""
+    match = re.search(r'Scariness:\s*(\d+)', output)
+    return int(match.group(1)) if match else 0
+
+
+def _boost_severity_from_crash_type(output: str, base_severity: int) -> int:
+    """Boost severity based on exploitability signals in crash output."""
+    output_lower = output.lower()
+    # WRITE bugs are almost always exploitable
+    if any(w in output_lower for w in ["write", "double-free", "double free"]):
+        return max(base_severity, 5)
+    # UAF and type confusion are high value
+    if any(w in output_lower for w in ["use-after-free", "type confusion",
+                                        "heap-buffer-overflow"]):
+        return max(base_severity, 5)
+    # Stack overflow write = ROP
+    if "stack-buffer-overflow" in output_lower and "write" in output_lower:
+        return max(base_severity, 5)
+    # MOZ_CRASH/MOZ_ASSERT indicate logic violations — often exploitable
+    if any(kw.lower() in output_lower for kw in MOZ_ASSERT_KEYWORDS):
+        return max(base_severity, 4)
+    # ASAN scariness score
+    scariness = _parse_scariness(output)
+    if scariness >= 60:
+        return max(base_severity, 5)
+    elif scariness >= 40:
+        return max(base_severity, 4)
+    return base_severity
+
 
 def detect_issue(run_result: dict, config: dict) -> tuple:
     """Detect crashes with configurable keywords; returns (is_issue, reason, severity)."""
@@ -58,6 +95,9 @@ def detect_issue(run_result: dict, config: dict) -> tuple:
                     severity = max(severity, 4)
                 else:
                     severity = max(severity, 2)
+
+        # Boost severity based on exploitability signals and ASAN scariness
+        severity = _boost_severity_from_crash_type(run_result["output"], severity)
 
         return True, f"non-zero exit ({run_result['exit_code']})", severity
 

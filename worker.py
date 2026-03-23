@@ -1,5 +1,6 @@
 import os
 import time
+import random
 from anthropic import Anthropic
 from modules.browser import launch_firefox, create_temp_profile, cleanup_profile
 from modules.generator import select_strategy, record_result, generate_test_case
@@ -11,7 +12,7 @@ from modules.storage import save_crash
 from utils.html_utils import extract_html
 
 
-def worker_loop(worker_id, config, shared_dedup=None, firefox_version="unknown"):
+def worker_loop(worker_id, config, shared_dedup=None, firefox_version="unknown", shared_tracker=None, shared_novelty=None):
     """Main fuzzing loop for a single worker."""
     client = Anthropic(
         api_key=config["api_key"],
@@ -20,8 +21,8 @@ def worker_loop(worker_id, config, shared_dedup=None, firefox_version="unknown")
         max_retries=3,
     )
 
-    tracker = SubsystemTracker()
-    novelty_tracker = NoveltyTracker(
+    tracker = shared_tracker or SubsystemTracker()
+    novelty_tracker = shared_novelty or NoveltyTracker(
         threshold=config.get("novelty_threshold", 0.85),
         max_corpus=config.get("novelty_max_corpus", 500)
     )
@@ -32,8 +33,19 @@ def worker_loop(worker_id, config, shared_dedup=None, firefox_version="unknown")
     deduplicator = shared_dedup or CrashDeduplicator()
     max_history_turns = config.get("history_max_turns", 6)
 
+    # Diversify initial prompt per worker to avoid correlated first tests
+    _initial_prompts = [
+        "Generate a browser fuzzing test case for Firefox targeting DOM node lifecycle and use-after-free via MutationObserver re-entrancy.",
+        "Generate a browser fuzzing test case for Firefox targeting SpiderMonkey JIT type confusion via shape transitions in hot loops.",
+        "Generate a browser fuzzing test case for Firefox targeting CSS layout frame destruction during ResizeObserver callbacks.",
+        "Generate a browser fuzzing test case for Firefox targeting Web Animations API timeline iteration with concurrent element removal.",
+        "Generate a browser fuzzing test case for Firefox targeting XSLT/XPath node tree manipulation during stylesheet transformation.",
+        "Generate a browser fuzzing test case for Firefox targeting ArrayBuffer detachment during TypedArray iteration via postMessage transfer.",
+        "Generate a browser fuzzing test case for Firefox targeting WebAssembly type boundary confusion with GC proposal types.",
+        "Generate a browser fuzzing test case for Firefox targeting iframe document lifecycle with cross-document node adoption.",
+    ]
     history = [
-        {"role": "user", "content": "I need you to generate browser fuzzing test cases for Firefox. Start with something that targets the HTML5 parser with malformed nested structures."},
+        {"role": "user", "content": _initial_prompts[(worker_id - 1) % len(_initial_prompts)]},
     ]
 
     test_count = 0
@@ -50,20 +62,28 @@ def worker_loop(worker_id, config, shared_dedup=None, firefox_version="unknown")
             # 1. Select strategy via UCB1
             strategy_name, strategy_prompt = select_strategy()
 
-            # 2. Get underexplored subsystems
-            subsystem_hint = tracker.get_underexplored(
-                top_n=config.get("subsystem_underexplored_top_n", 3)
+            # 2. Get underexplored subsystems — offset by worker_id so workers
+            #    target DIFFERENT subsystems instead of all picking the same one
+            all_underexplored = tracker.get_underexplored(
+                top_n=max(config.get("subsystem_underexplored_top_n", 3) + 4, 8)
             )
+            # Each worker picks from a different offset in the list
+            worker_offset = (worker_id - 1) % max(len(all_underexplored), 1)
+            subsystem_hint = all_underexplored[worker_offset:worker_offset+3]
+            if len(subsystem_hint) < 3:
+                subsystem_hint += all_underexplored[:3 - len(subsystem_hint)]
 
             # 3. Build context prompt
             context_str = tracker.build_context_prompt()
 
-            # 4. Check for plateau
+            # 4. Check for plateau — on plateau, RESET history to break the rut
             plateau_prompt = None
             is_plateau = plateau_detector.is_plateau()
             if is_plateau:
                 plateau_prompt = plateau_detector.get_plateau_prompt()
-                print(f"[Worker {worker_id}] Plateau detected! Injecting diversity prompt...")
+                print(f"[Worker {worker_id}] Plateau detected! Resetting history + injecting diversity prompt...")
+                # Reset history to just the initial prompt — the bloated context IS the problem
+                history = [history[0]]
 
             # Build combined prompt with subsystem requirement FIRST
             subsystem_target = subsystem_hint[0] if subsystem_hint else "JS_engine"
@@ -94,8 +114,8 @@ def worker_loop(worker_id, config, shared_dedup=None, firefox_version="unknown")
                 client, history, strategy_name, combined_prompt, subsystem_hint
             )
 
-            # 6. Extract HTML (already done in generate_test_case, but ensure clean)
-            html_content = extract_html(html_content)
+            # 6. HTML is already extracted by generate_test_case — no double extraction
+            # (double extract_html could strip content if HTML contains backtick sequences)
 
             # 7. Novelty check
             is_novel, score = novelty_tracker.is_novel(html_content)
@@ -107,10 +127,20 @@ def worker_loop(worker_id, config, shared_dedup=None, firefox_version="unknown")
             if not is_novel:
                 novelty_skips += 1
                 print(f"[W{worker_id} | T#{test_count} | strategy:{strategy_name} | subsystem:{current_subsystem} | novelty:{score:.2f}] → SKIPPED (duplicate)")
-                history.append({"role": "user", "content": "That test case was too similar to previous ones. Generate something COMPLETELY DIFFERENT targeting a new subsystem with a novel approach."})
+                # Vary the retry message to avoid repetitive history
+                _skip_msgs = [
+                    "That test was too similar. Target a COMPLETELY different Firefox subsystem and C++ code path.",
+                    "Too similar — try a radically different approach. Use different DOM APIs, different timing, different memory patterns.",
+                    "Duplicate detected. Switch to a new attack surface entirely — different subsystem, different vulnerability class.",
+                    "That pattern is exhausted. Think of a novel invariant violation that hasn't been tried yet.",
+                ]
+                history.append({"role": "user", "content": random.choice(_skip_msgs)})
                 record_result(strategy_name, found_crash=False)
                 tracker.record_test(current_subsystem)
                 plateau_detector.update(False)
+                # Trim history BEFORE continuing (prevents unbounded growth on consecutive skips)
+                if len(history) > max_history_turns * 2:
+                    history = history[:1] + history[-(max_history_turns * 2 - 1):]
                 continue
 
             # 9. Save HTML to temp file
@@ -138,6 +168,8 @@ def worker_loop(worker_id, config, shared_dedup=None, firefox_version="unknown")
                     print(f"[W{worker_id} | T#{test_count} | strategy:{strategy_name} | subsystem:{current_subsystem} | novelty:{score:.2f}] → {issue_reason} sev:{severity} (below threshold {min_severity}, skipped)")
                     record_result(strategy_name, found_crash=False)
                     plateau_detector.update(False)
+                    if len(history) > max_history_turns * 2:
+                        history = history[:1] + history[-(max_history_turns * 2 - 1):]
                     continue
 
                 # 14b. Deduplication check
@@ -145,6 +177,8 @@ def worker_loop(worker_id, config, shared_dedup=None, firefox_version="unknown")
                 if is_dup:
                     print(f"[W{worker_id} | T#{test_count} | strategy:{strategy_name} | subsystem:{current_subsystem} | novelty:{score:.2f}] → DUP (sig:{signature[:8]})")
                     record_result(strategy_name, found_crash=False)
+                    if len(history) > max_history_turns * 2:
+                        history = history[:1] + history[-(max_history_turns * 2 - 1):]
                     continue
 
                 print(f"[W{worker_id} | T#{test_count} | strategy:{strategy_name} | subsystem:{current_subsystem} | novelty:{score:.2f}] → CRASH sev:{severity} sig:{signature[:8]}")

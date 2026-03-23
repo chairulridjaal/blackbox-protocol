@@ -1,5 +1,5 @@
 import { cn } from '../lib/utils'
-import { Bug, ShieldAlert, CheckCircle2, Clock, Activity, Server } from 'lucide-react'
+import { Bug, ShieldAlert, CheckCircle2, Clock, Activity, Server, Microscope, ShieldCheck } from 'lucide-react'
 
 const severityColors = {
   1: 'bg-zinc-100 dark:bg-zinc-500/20 text-zinc-600 dark:text-zinc-400 border-zinc-200 dark:border-zinc-500/20',
@@ -38,10 +38,17 @@ export default function Stats({ stats }) {
       color: "text-red-600 dark:text-red-400"
     },
     {
-      title: "Pending Review",
+      title: "Awaiting Review",
+      value: (stats.awaiting_review || 0),
+      icon: Microscope,
+      description: "Verified by daemon, needs human review",
+      color: "text-purple-600 dark:text-purple-400"
+    },
+    {
+      title: "Pending",
       value: stats.new,
       icon: Clock,
-      description: "New crashes detected",
+      description: "New — not yet verified",
       color: "text-yellow-600 dark:text-yellow-400"
     },
     {
@@ -56,7 +63,7 @@ export default function Stats({ stats }) {
   return (
     <div className="space-y-6">
       {/* Top Metrics */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-4">
         {cards.map((card, idx) => (
           <div key={idx} className="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950/50 p-6 shadow-sm backdrop-blur transition-all hover:bg-zinc-50 dark:hover:bg-zinc-900/50">
             <div className="flex flex-row items-center justify-between pb-2 space-y-0">
@@ -143,6 +150,35 @@ export default function Stats({ stats }) {
                   <div className="text-[10px] font-mono text-zinc-500 truncate" title={name}>{name}</div>
                 </div>
               ))}
+          </div>
+        </div>
+      )}
+
+      {/* Verification Verdicts */}
+      {stats.by_verdict && Object.keys(stats.by_verdict).length > 0 && (
+        <div className="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950/50 p-6 shadow-sm">
+          <h3 className="tracking-tight text-sm font-medium text-zinc-600 dark:text-zinc-400 flex items-center gap-2 mb-4">
+            <ShieldCheck className="w-4 h-4" />
+            Verification Verdicts
+          </h3>
+          <div className="flex flex-wrap gap-3">
+            {Object.entries(stats.by_verdict)
+              .sort(([, a], [, b]) => b - a)
+              .map(([verdict, count]) => {
+                const colorMap = {
+                  CONFIRMED: 'bg-red-50 dark:bg-red-500/10 border-red-200 dark:border-red-500/20 text-red-700 dark:text-red-400',
+                  LIKELY: 'bg-orange-50 dark:bg-orange-500/10 border-orange-200 dark:border-orange-500/20 text-orange-700 dark:text-orange-400',
+                  FLAKY: 'bg-yellow-50 dark:bg-yellow-500/10 border-yellow-200 dark:border-yellow-500/20 text-yellow-700 dark:text-yellow-400',
+                  FALSE_POSITIVE: 'bg-zinc-50 dark:bg-zinc-500/10 border-zinc-200 dark:border-zinc-500/20 text-zinc-600 dark:text-zinc-400',
+                  UNREPRODUCIBLE: 'bg-zinc-50 dark:bg-zinc-500/10 border-zinc-200 dark:border-zinc-500/20 text-zinc-600 dark:text-zinc-400',
+                }
+                return (
+                  <div key={verdict} className={cn("flex flex-col items-center gap-1 p-4 rounded-lg border min-w-[100px]", colorMap[verdict] || 'bg-zinc-50 dark:bg-zinc-900 border-zinc-200 dark:border-zinc-800')}>
+                    <span className="text-2xl font-bold">{count}</span>
+                    <span className="text-[10px] font-semibold uppercase tracking-wider">{verdict.replace(/_/g, ' ')}</span>
+                  </div>
+                )
+              })}
           </div>
         </div>
       )}

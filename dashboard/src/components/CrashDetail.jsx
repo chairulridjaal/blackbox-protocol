@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom'
 import axios from 'axios'
 import { format } from 'date-fns'
 import { cn } from '../lib/utils'
-import { ArrowLeft, Copy, CheckCircle2, FileJson, XCircle, Activity, Server, Hash, Clock, Trash2 } from 'lucide-react'
+import { ArrowLeft, Copy, CheckCircle2, FileJson, XCircle, Activity, Server, Hash, Clock, Trash2, Microscope, ShieldCheck, Zap, Target } from 'lucide-react'
 
 const severityColors = {
   1: 'bg-zinc-100 dark:bg-zinc-500/20 text-zinc-600 dark:text-zinc-400 border-zinc-200 dark:border-zinc-500/20',
@@ -21,12 +21,28 @@ const severityLabels = {
   5: 'Critical',
 }
 
+const verdictColors = {
+  CONFIRMED: 'bg-red-100 dark:bg-red-500/20 text-red-700 dark:text-red-400 border-red-200 dark:border-red-500/30',
+  LIKELY: 'bg-orange-100 dark:bg-orange-500/20 text-orange-700 dark:text-orange-400 border-orange-200 dark:border-orange-500/30',
+  FLAKY: 'bg-yellow-100 dark:bg-yellow-500/20 text-yellow-700 dark:text-yellow-400 border-yellow-200 dark:border-yellow-500/30',
+  FALSE_POSITIVE: 'bg-zinc-100 dark:bg-zinc-500/20 text-zinc-600 dark:text-zinc-400 border-zinc-200 dark:border-zinc-500/30',
+  UNREPRODUCIBLE: 'bg-zinc-100 dark:bg-zinc-500/20 text-zinc-600 dark:text-zinc-400 border-zinc-200 dark:border-zinc-500/30',
+}
+
+const exploitColors = {
+  EXPLOITABLE: 'text-red-700 dark:text-red-400',
+  PROBABLY_EXPLOITABLE: 'text-orange-700 dark:text-orange-400',
+  PROBABLY_NOT_EXPLOITABLE: 'text-yellow-700 dark:text-yellow-400',
+  NOT_EXPLOITABLE: 'text-zinc-600 dark:text-zinc-400',
+}
+
 export default function CrashDetail({ onUpdateStatus, onDelete }) {
   const { crashId } = useParams()
   const navigate = useNavigate()
   const [crash, setCrash] = useState(null)
   const [loading, setLoading] = useState(true)
   const [activeTab, setActiveTab] = useState('report')
+  const [activeTabSet, setActiveTabSet] = useState(false)
   const [copied, setCopied] = useState(false)
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
 
@@ -43,6 +59,13 @@ export default function CrashDetail({ onUpdateStatus, onDelete }) {
     }
     fetchCrash()
   }, [crashId])
+
+  // Auto-select verification tab when it's available and user hasn't manually picked a tab
+  useEffect(() => {
+    if (crash?.verification && !activeTabSet) {
+      setActiveTab('verification')
+    }
+  }, [crash?.verification])
 
   if (loading) {
     return (
@@ -66,7 +89,12 @@ export default function CrashDetail({ onUpdateStatus, onDelete }) {
     )
   }
 
-  const { meta, html, report, original } = crash
+  const { meta, html, report, original, verification, output } = crash
+
+  const handleTabClick = (tabId) => {
+    setActiveTab(tabId)
+    setActiveTabSet(true)
+  }
 
   const handleStatusChange = async (status) => {
     await onUpdateStatus(crashId, status)
@@ -175,19 +203,88 @@ export default function CrashDetail({ onUpdateStatus, onDelete }) {
             <span className="text-sm text-zinc-900 dark:text-zinc-200 font-medium text-mono">{meta.test_num}</span>
           </div>
         </div>
+
+        {/* Verification metadata (shown when crash has been verified) */}
+        {meta.verdict && (
+          <div className="pt-4 border-t border-zinc-100 dark:border-zinc-800/50">
+            <h3 className="flex items-center gap-2 text-xs font-medium text-zinc-500 dark:text-zinc-500 uppercase tracking-wider mb-3">
+              <Microscope className="w-3.5 h-3.5" /> Verification Results
+            </h3>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              <div className="p-3 rounded-lg bg-zinc-50 dark:bg-zinc-900/50 border border-zinc-100 dark:border-zinc-800/50">
+                <span className="text-[10px] font-medium text-zinc-500 uppercase tracking-wider block mb-1">Verdict</span>
+                <span className={cn(
+                  "inline-flex items-center gap-1 px-2 py-0.5 rounded border text-xs font-bold uppercase",
+                  verdictColors[meta.verdict] || 'text-zinc-500 dark:text-zinc-400 border-zinc-300 dark:border-zinc-700'
+                )}>
+                  <ShieldCheck className="w-3 h-3" />
+                  {meta.verdict}
+                </span>
+              </div>
+              <div className="p-3 rounded-lg bg-zinc-50 dark:bg-zinc-900/50 border border-zinc-100 dark:border-zinc-800/50">
+                <span className="text-[10px] font-medium text-zinc-500 uppercase tracking-wider block mb-1">Confidence</span>
+                <span className="text-sm font-semibold text-zinc-900 dark:text-zinc-200">{meta.confidence || '—'}</span>
+              </div>
+              <div className="p-3 rounded-lg bg-zinc-50 dark:bg-zinc-900/50 border border-zinc-100 dark:border-zinc-800/50">
+                <span className="text-[10px] font-medium text-zinc-500 uppercase tracking-wider block mb-1">Exploitability</span>
+                <span className={cn(
+                  "text-xs font-bold",
+                  exploitColors[meta.exploitability] || 'text-zinc-500 dark:text-zinc-400'
+                )}>
+                  {meta.exploitability ? meta.exploitability.replace(/_/g, ' ') : '—'}
+                </span>
+              </div>
+              <div className="p-3 rounded-lg bg-zinc-50 dark:bg-zinc-900/50 border border-zinc-100 dark:border-zinc-800/50">
+                <span className="text-[10px] font-medium text-zinc-500 uppercase tracking-wider block mb-1">Repro Rate</span>
+                <span className="text-sm font-semibold text-zinc-900 dark:text-zinc-200">{meta.repro_rate || '—'}</span>
+                {meta.repro_classification && (
+                  <span className="text-[10px] text-zinc-500 block">{meta.repro_classification}</span>
+                )}
+              </div>
+            </div>
+            {(meta.jit_disabled_crashes !== undefined || meta.gc_zeal_crashes !== undefined) && (
+              <div className="flex flex-wrap gap-2 mt-3">
+                {meta.jit_disabled_crashes !== undefined && (
+                  <span className={cn(
+                    "inline-flex items-center gap-1 px-2 py-1 rounded text-[10px] font-medium border",
+                    meta.jit_disabled_crashes
+                      ? 'text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-500/10 border-red-200 dark:border-red-500/20'
+                      : 'text-green-600 dark:text-green-400 bg-green-50 dark:bg-green-500/10 border-green-200 dark:border-green-500/20'
+                  )}>
+                    <Zap className="w-2.5 h-2.5" />
+                    JIT off: {meta.jit_disabled_crashes ? 'Still crashes' : 'No crash'}
+                  </span>
+                )}
+                {meta.gc_zeal_crashes !== undefined && (
+                  <span className={cn(
+                    "inline-flex items-center gap-1 px-2 py-1 rounded text-[10px] font-medium border",
+                    meta.gc_zeal_crashes
+                      ? 'text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-500/10 border-red-200 dark:border-red-500/20'
+                      : 'text-green-600 dark:text-green-400 bg-green-50 dark:bg-green-500/10 border-green-200 dark:border-green-500/20'
+                  )}>
+                    <Target className="w-2.5 h-2.5" />
+                    GC Zeal: {meta.gc_zeal_crashes ? 'Still crashes' : 'No crash'}
+                  </span>
+                )}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Code Viewer */}
       <div className="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950/50 flex flex-col overflow-hidden shadow-sm">
         <div className="flex border-b border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900/50 px-2 overflow-x-auto">
           {[
+            ...(verification ? [{ id: 'verification', label: 'Verification' }] : []),
             { id: 'report', label: 'Report.txt' },
             { id: 'minimized', label: 'Minimized.html' },
-            { id: 'original', label: 'Original.html' }
+            { id: 'original', label: 'Original.html' },
+            ...(output ? [{ id: 'output', label: 'ASAN Output' }] : []),
           ].map(tab => (
             <button
               key={tab.id}
-              onClick={() => setActiveTab(tab.id)}
+              onClick={() => handleTabClick(tab.id)}
               className={cn(
                 "px-4 py-3 text-sm font-medium whitespace-nowrap border-b-2 transition-all",
                 activeTab === tab.id
@@ -201,8 +298,10 @@ export default function CrashDetail({ onUpdateStatus, onDelete }) {
           <div className="ml-auto flex items-center px-4">
             <button
               onClick={() => copyToClipboard(
+                activeTab === 'verification' ? verification :
                 activeTab === 'report' ? report :
-                activeTab === 'minimized' ? html : original
+                activeTab === 'minimized' ? html :
+                activeTab === 'output' ? output : original
               )}
               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 hover:bg-zinc-200 dark:hover:bg-zinc-700 hover:text-zinc-900 dark:hover:text-zinc-100 transition-colors"
             >
@@ -214,9 +313,11 @@ export default function CrashDetail({ onUpdateStatus, onDelete }) {
         
         <div className="relative group bg-zinc-50 dark:bg-[#0d0d0f] p-4 m-0 overflow-auto min-h-[300px] max-h-[600px] custom-scrollbar">
           <pre className="text-[13px] text-zinc-800 dark:text-zinc-300 font-mono whitespace-pre-wrap leading-relaxed">
+            {activeTab === 'verification' && verification}
             {activeTab === 'report' && report}
             {activeTab === 'minimized' && html}
             {activeTab === 'original' && original}
+            {activeTab === 'output' && output}
           </pre>
         </div>
       </div>

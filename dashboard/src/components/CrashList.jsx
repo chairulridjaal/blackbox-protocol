@@ -2,7 +2,7 @@ import { useState, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { formatDistanceToNow } from 'date-fns'
 import { cn } from '../lib/utils'
-import { CheckCircle2, XCircle, AlertCircle, ChevronRight, FileJson, Trash2, Search, ArrowUp, ArrowDown, X } from 'lucide-react'
+import { CheckCircle2, XCircle, AlertCircle, ChevronRight, FileJson, Trash2, Search, ArrowUp, ArrowDown, X, Microscope, ShieldCheck } from 'lucide-react'
 
 const severityColors = {
   1: 'bg-zinc-100 dark:bg-zinc-500/10 text-zinc-600 dark:text-zinc-400 border-zinc-200 dark:border-zinc-500/20',
@@ -16,9 +16,18 @@ const severityLabels = { 1: 'Low', 2: 'Med-Low', 3: 'Medium', 4: 'High', 5: 'Cri
 
 const statusConfig = {
   new: { color: 'text-yellow-600 dark:text-yellow-400 bg-yellow-50 dark:bg-yellow-400/10 border-yellow-200 dark:border-yellow-400/20', icon: AlertCircle },
+  awaiting_review: { color: 'text-purple-600 dark:text-purple-400 bg-purple-50 dark:bg-purple-400/10 border-purple-200 dark:border-purple-400/20', icon: Microscope },
   verified: { color: 'text-green-600 dark:text-green-400 bg-green-50 dark:bg-green-400/10 border-green-200 dark:border-green-400/20', icon: CheckCircle2 },
   ignored: { color: 'text-zinc-600 dark:text-zinc-400 bg-zinc-50 dark:bg-zinc-400/10 border-zinc-200 dark:border-zinc-400/20', icon: XCircle },
   submitted: { color: 'text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-400/10 border-blue-200 dark:border-blue-400/20', icon: FileJson },
+}
+
+const verdictColors = {
+  CONFIRMED: 'text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-500/10 border-red-200 dark:border-red-500/20',
+  LIKELY: 'text-orange-600 dark:text-orange-400 bg-orange-50 dark:bg-orange-500/10 border-orange-200 dark:border-orange-500/20',
+  FLAKY: 'text-yellow-600 dark:text-yellow-400 bg-yellow-50 dark:bg-yellow-500/10 border-yellow-200 dark:border-yellow-500/20',
+  FALSE_POSITIVE: 'text-zinc-500 dark:text-zinc-500 bg-zinc-50 dark:bg-zinc-500/10 border-zinc-200 dark:border-zinc-500/20',
+  UNREPRODUCIBLE: 'text-zinc-500 dark:text-zinc-500 bg-zinc-50 dark:bg-zinc-500/10 border-zinc-200 dark:border-zinc-500/20',
 }
 
 export default function CrashList({ crashes, onUpdateStatus, onDelete, onBulkUpdateStatus, onBulkDelete }) {
@@ -49,7 +58,9 @@ export default function CrashList({ crashes, onUpdateStatus, onDelete, onBulkUpd
         c.crash_id.toLowerCase().includes(q) ||
         (c.issue_reason || '').toLowerCase().includes(q) ||
         (c.strategy_name || '').toLowerCase().includes(q) ||
-        (c.subsystem || '').toLowerCase().includes(q)
+        (c.subsystem || '').toLowerCase().includes(q) ||
+        (c.verdict || '').toLowerCase().includes(q) ||
+        (c.exploitability || '').toLowerCase().includes(q)
       )
     }
 
@@ -180,7 +191,7 @@ export default function CrashList({ crashes, onUpdateStatus, onDelete, onBulkUpd
               className={selectClass}
             >
               <option value="">All Status</option>
-              {['new', 'verified', 'ignored', 'submitted'].map(s => <option key={s} value={s}>{s}</option>)}
+              {['new', 'awaiting_review', 'verified', 'ignored', 'submitted'].map(s => <option key={s} value={s}>{s === 'awaiting_review' ? 'Awaiting Review' : s}</option>)}
             </select>
 
             {/* Strategy filter */}
@@ -333,8 +344,17 @@ export default function CrashList({ crashes, onUpdateStatus, onDelete, onBulkUpd
                           statusConfig[crash.status]?.color || statusConfig.new.color
                         )}>
                           <StatusIcon className="w-3 h-3" />
-                          {crash.status}
+                          {crash.status === 'awaiting_review' ? 'Awaiting Review' : crash.status}
                         </span>
+                        {crash.verdict && (
+                          <span className={cn(
+                            "inline-flex items-center gap-1 px-2 py-0.5 rounded border text-[10px] font-semibold uppercase tracking-wide",
+                            verdictColors[crash.verdict] || 'text-zinc-500 dark:text-zinc-400 bg-zinc-50 dark:bg-zinc-800 border-zinc-200 dark:border-zinc-700'
+                          )}>
+                            <ShieldCheck className="w-2.5 h-2.5" />
+                            {crash.verdict}
+                          </span>
+                        )}
                         <span className="text-xs text-zinc-500">
                           {formatDistanceToNow(new Date(crash.timestamp), { addSuffix: true })}
                         </span>

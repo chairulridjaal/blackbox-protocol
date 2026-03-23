@@ -5,7 +5,8 @@ SUBSYSTEMS = [
     "HTML5_parser", "CSS_layout", "JS_engine", "SVG_renderer",
     "Canvas_WebGL", "Web_Audio", "WebRTC", "DOM_events",
     "IndexedDB", "WebAssembly", "CSS_animations", "Shadow_DOM",
-    "Intersection_Observer", "Service_Worker", "WebSockets"
+    "Intersection_Observer", "Service_Worker", "WebSockets",
+    "Web_Animations", "XSLT_XPath", "WebTransport",
 ]
 
 

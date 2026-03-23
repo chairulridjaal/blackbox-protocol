@@ -80,13 +80,22 @@ def get_stats():
     stats = {
         "total": len(crashes),
         "new": sum(1 for c in crashes if c.get("status") == "new"),
+        "awaiting_review": sum(1 for c in crashes if c.get("status") == "awaiting_review"),
         "verified": sum(1 for c in crashes if c.get("status") == "verified"),
         "ignored": sum(1 for c in crashes if c.get("status") == "ignored"),
         "submitted": sum(1 for c in crashes if c.get("status") == "submitted"),
         "by_severity": {i: sum(1 for c in crashes if c.get("severity") == i) for i in range(1, 6)},
         "by_strategy": by_strategy,
         "by_subsystem": by_subsystem,
+        "by_verdict": {},
     }
+
+    # Verdict breakdown (from verification daemon)
+    for c in crashes:
+        v = c.get("verdict")
+        if v:
+            stats["by_verdict"][v] = stats["by_verdict"].get(v, 0) + 1
+
     return stats
 
 
@@ -144,10 +153,14 @@ def get_crash(crash_id: str):
     html_path = os.path.join(crash_dir, meta["html_file"])
     report_path = os.path.join(crash_dir, meta["report_file"])
     original_path = os.path.join(crash_dir, meta.get("original_file", ""))
+    verification_path = os.path.join(crash_dir, "verification_report.txt")
+    output_path = os.path.join(crash_dir, "output.txt")
 
     html_content = ""
     report_content = ""
     original_content = ""
+    verification_content = ""
+    output_content = ""
 
     if os.path.exists(html_path):
         with open(html_path, "r", encoding="utf-8") as f:
@@ -161,11 +174,21 @@ def get_crash(crash_id: str):
         with open(original_path, "r", encoding="utf-8") as f:
             original_content = f.read()
 
+    if os.path.exists(verification_path):
+        with open(verification_path, "r", encoding="utf-8") as f:
+            verification_content = f.read()
+
+    if os.path.exists(output_path):
+        with open(output_path, "r", encoding="utf-8") as f:
+            output_content = f.read()
+
     return {
         "meta": meta,
         "html": html_content,
         "report": report_content,
-        "original": original_content
+        "original": original_content,
+        "verification": verification_content,
+        "output": output_content,
     }
 
 
