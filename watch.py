@@ -70,7 +70,7 @@ def collect_crash_summaries():
                 summaries.append({
                     "crash_id": data.get("crash_id", "unknown"),
                     "severity": data.get("severity", "unknown"),
-                    "strategy": data.get("strategy", "unknown"),
+                    "strategy": data.get("strategy_name", "unknown"),
                     "subsystem": data.get("subsystem", "unknown"),
                     "issue_reason": data.get("issue_reason", "unknown"),
                     "status": data.get("status", "unknown"),
@@ -114,7 +114,7 @@ def collect_strategy_stats():
         for meta_path in CRASHES_DIR.rglob("meta.json"):
             try:
                 data = json.loads(meta_path.read_text())
-                name = data.get("strategy", "unknown")
+                name = data.get("strategy_name", "unknown")
                 stats[name] = stats.get(name, 0) + 1
             except Exception:
                 continue
@@ -200,9 +200,8 @@ def collect_system_prompt_preview():
 
 
 def call_claude(data: dict) -> dict:
-    config = json.loads(CONFIG_PATH.read_text())
-    api_key = config.get("api_key", "")
-    base_url = config.get("base_url", "https://api.anthropic.com")
+    api_key = os.getenv("ANTHROPIC_API_KEY", "")
+    base_url = os.getenv("ANTHROPIC_BASE_URL", "https://api.anthropic.com")
 
     user_prompt = f"""BROWSER TESTING TOOL — STATUS REPORT (last 2 hours)
 
@@ -279,7 +278,24 @@ NEVER suggest auto fixes for:
     url = base_url.rstrip("/") + "/v1/messages"
     resp = requests.post(url, headers=headers, json=body, timeout=120)
     resp.raise_for_status()
-    content = resp.json()["content"][0]["text"]
+    resp_json = resp.json()
+
+    # Handle both standard Anthropic and proxy response formats
+    if "content" in resp_json and resp_json["content"]:
+        content = resp_json["content"][0]["text"]
+    elif "choices" in resp_json:
+        # OpenAI-compatible proxy format
+        content = resp_json["choices"][0]["message"]["content"]
+    else:
+        raise ValueError(f"Unexpected API response format: {json.dumps(resp_json)[:500]}")
+
+    # Strip markdown fences if Claude wrapped the JSON
+    content = content.strip()
+    if content.startswith("```"):
+        content = content.split("\n", 1)[1]
+        content = content.rsplit("```", 1)[0]
+        content = content.strip()
+
     return json.loads(content)
 
 

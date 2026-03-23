@@ -101,13 +101,14 @@ def launch_firefox(firefox_path, html_path, profile_dir, timeout=15, display=Non
         except subprocess.TimeoutExpired:
             kill_stale_processes(pid=proc.pid)
             try:
-                proc.wait(timeout=5)
+                stdout, stderr = proc.communicate(timeout=5)
             except subprocess.TimeoutExpired:
                 proc.kill()
-                proc.wait()
+                stdout, stderr = proc.communicate()
+            output = (stdout or "") + (stderr or "")
             return {
                 "exit_code": -1,
-                "output": "",
+                "output": output,
                 "timed_out": True,
                 "pid": proc.pid,
                 "error": "Process timed out"

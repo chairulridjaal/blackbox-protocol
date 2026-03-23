@@ -67,16 +67,27 @@ def worker_loop(worker_id, config, shared_dedup=None, firefox_version="unknown")
 
             # Build combined prompt with subsystem requirement FIRST
             subsystem_target = subsystem_hint[0] if subsystem_hint else "JS_engine"
-            subsystem_instruction = f"REQUIRED: Your test case MUST target the {subsystem_target} subsystem specifically."
-            if subsystem_target != "HTML5_parser":
-                subsystem_instruction += " Do not generate an HTML parser test."
-            combined_prompt = (
-                subsystem_instruction + "\n\n"
-                + context_str + "\n\n"
-                + strategy_prompt
-            )
-            if plateau_prompt:
-                combined_prompt = plateau_prompt + "\n\n" + combined_prompt
+            if is_plateau and len(subsystem_hint) > 1:
+                # On plateau, skip the top pick (likely exhausted) and use next candidate
+                subsystem_target = subsystem_hint[1]
+                current_subsystem = subsystem_target
+                combined_prompt = (
+                    plateau_prompt + "\n\n"
+                    + context_str + "\n\n"
+                    + f"Switch to testing the {subsystem_target} subsystem with a completely new technique.\n\n"
+                    + strategy_prompt
+                )
+            else:
+                subsystem_instruction = f"REQUIRED: Your test case MUST target the {subsystem_target} subsystem specifically."
+                if subsystem_target != "HTML5_parser":
+                    subsystem_instruction += " Do not generate an HTML parser test."
+                combined_prompt = (
+                    subsystem_instruction + "\n\n"
+                    + context_str + "\n\n"
+                    + strategy_prompt
+                )
+                if plateau_prompt:
+                    combined_prompt = plateau_prompt + "\n\n" + combined_prompt
 
             # 5. Generate test case
             history, html_content = generate_test_case(
@@ -98,6 +109,7 @@ def worker_loop(worker_id, config, shared_dedup=None, firefox_version="unknown")
                 print(f"[W{worker_id} | T#{test_count} | strategy:{strategy_name} | subsystem:{current_subsystem} | novelty:{score:.2f}] → SKIPPED (duplicate)")
                 history.append({"role": "user", "content": "That test case was too similar to previous ones. Generate something COMPLETELY DIFFERENT targeting a new subsystem with a novel approach."})
                 record_result(strategy_name, found_crash=False)
+                tracker.record_test(current_subsystem)
                 plateau_detector.update(False)
                 continue
 
@@ -114,9 +126,6 @@ def worker_loop(worker_id, config, shared_dedup=None, firefox_version="unknown")
 
             # 11. Detect issues
             is_issue, issue_reason, severity = detect_issue(run_result, config)
-
-            # 12. Update plateau detector
-            plateau_detector.update(True)
 
             # 13. Record test for subsystem
             tracker.record_test(current_subsystem)
@@ -173,10 +182,12 @@ def worker_loop(worker_id, config, shared_dedup=None, firefox_version="unknown")
                 except Exception as e:
                     print(f"  Error during crash analysis: {e}")
                     record_result(strategy_name, found_crash=True)
+                plateau_detector.update(True)
             else:
                 # 15. No issue found
                 print(f"[W{worker_id} | T#{test_count} | strategy:{strategy_name} | subsystem:{current_subsystem} | novelty:{score:.2f} | plateau:{is_plateau}] → OK")
                 record_result(strategy_name, found_crash=False)
+                plateau_detector.update(True)
 
             # 16. History trimming — keep first message + most recent turns
             if len(history) > max_history_turns * 2:

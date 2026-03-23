@@ -17,6 +17,18 @@ DEFAULT_ASAN_KEYWORDS = [
 def detect_issue(run_result: dict, config: dict) -> tuple:
     """Detect crashes with configurable keywords; returns (is_issue, reason, severity)."""
     if run_result["timed_out"]:
+        # Check if there's ASAN output even on timeout (captured from buffered stderr)
+        output_lower = run_result["output"].lower() if run_result["output"] else ""
+        if output_lower:
+            asan_keywords = config.get("asan_keywords", DEFAULT_ASAN_KEYWORDS)
+            for keyword in asan_keywords:
+                if keyword.lower() in output_lower:
+                    return True, f"timeout+asan: {keyword}", 5
+            for keyword in config["crash_keywords"]:
+                if keyword.lower() in output_lower:
+                    if keyword.lower() in ["segfault", "segmentation fault", "crash", "sigsegv"]:
+                        return True, f"timeout+crash: {keyword}", 4
+                    return True, f"timeout+crash: {keyword}", 3
         return True, "timeout", 1  # Timeouts are low-value DoS, not memory corruption
 
     if run_result["error"]:
