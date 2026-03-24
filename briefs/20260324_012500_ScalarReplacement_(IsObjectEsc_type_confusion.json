@@ -1,0 +1,22 @@
+{
+  "brief_id": "20260324_012500_ScalarReplacement_(IsObjectEsc_type_confusion",
+  "created_at": "2026-03-24T01:25:00.785725Z",
+  "priority": "medium",
+  "target": {
+    "class": "ScalarReplacement (IsObjectEscaped)",
+    "method": "IsObjectEscaped",
+    "file": "js/src/jit/ScalarReplacement.cpp"
+  },
+  "vulnerability": {
+    "class": "type_confusion",
+    "hypothesis": "In IsObjectEscaped (line 284), when a scalar-replaced object is used as the VALUE operand (operand index 1) of MPostWriteBarrier, the escape analysis unconditionally breaks (treating it as non-escaped). But MPostWriteBarrier has two operands: object (index 0) and value (index 1). If the scalar-replaced object appears as operand 1 (being stored INTO another object), it truly escapes \u2014 it's being written to a slot of another live object. The escape analysis fails to detect this, causing the object to be scalar-replaced even though a reference to it exists in another object's slot. After scalar replacement removes the allocation, the other object holds a dangling/invalid reference, leading to type confusion or use-after-free when the stored reference is later read. Compare with StoreFixedSlot (line 274-282) which correctly checks `def->indexOf(*i) == 0` and marks as escaped if the object is not operand 0.",
+    "source_evidence": "\n// ScalarReplacement.cpp lines 273-285:\n    MDefinition* def = consumer->toDefinition();\n    switch (def->op()) {\n      case MDefinition::Opcode::StoreFixedSlot:\n      case MDefinition::Opcode::LoadFixedSlot:\n        // Not escaped if it is the first argument.\n        if (def->indexOf(*i) == 0) {\n          break;\n        }\n        JitSpewDef(JitSpew_Escape, \"is escaped by\\n\", def);\n        return true;\n\n      case MDefinition::Opcode::PostWriteBarrier:\n        break;  // BUG: unconditional break, no check of operand index!\n\n// MIR.h lines 8712-8722 (MPostWriteBarrier definition):\nclass MPostWriteBarrier : public MBinaryInstruction,\n                          public ObjectPolicy<0>::Data {\n  MPostWriteBarrier(MDefinition* obj, MDefinition* value)\n      : MBinaryInstruction(classOpcode, obj, value) { setGuard(); }\n public:\n  INSTRUCTION_HEADER(PostWriteBarrier)\n  TRIVIAL_NEW_WRAPPERS\n  NAMED_OPERANDS((0, object), (1, value))\n\n// visitPostWriteBarrier (line 696-703) only checks object operand:\nvoid ObjectMemoryView::visitPostWriteBarrier(MPostWriteBarrier* ins) {\n  if (ins->object() != obj_) { return; }\n  ins->block()->discard(ins);  // discards the barrier even if obj_ is the value!\n}\n",
+    "related_cve": "CVE-2024-9402"
+  },
+  "trigger": {
+    "sequence": "1. Create a constructor function that allocates a plain object (obj A) \n2. In the same function, store obj A as a property value of ANOTHER object (obj B) that is NOT scalar-replaced (e.g. it escapes the function)\n3. The JIT should emit: StoreFixedSlot(objB, slot, objA) + PostWriteBarrier(objB, objA)\n4. The escape analysis sees objA used as operand 1 of PostWriteBarrier and incorrectly says \"not escaped\"\n5. However, objA IS escaped via StoreFixedSlot where it's operand 1 (the value). StoreFixedSlot correctly detects this.\n6. KEY: We need a scenario where the PostWriteBarrier is the ONLY use that should mark the object as escaped, but StoreFixedSlot isn't present (e.g. the store was optimized away or uses a different path like StoreDynamicSlot through Slots)\n7. More specifically: create objA, use it as a value in a PostWriteBarrier without a corresponding store that would catch the escape \u2014 possibly through a named lambda closure environment pattern:\n   function outer() {\n     var env = {}; // scalar replacement candidate\n     var f = function inner() { return env; }; // env stored via PostWriteBarrier\n     return f();\n   }\n   for (var i = 0; i < 100000; i++) outer();\n"
+  },
+  "confidence": "medium",
+  "status": "pending",
+  "feedback": null
+}

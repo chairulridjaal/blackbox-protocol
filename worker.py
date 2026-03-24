@@ -1,4 +1,5 @@
 import os
+import json
 import time
 import random
 from anthropic import Anthropic
@@ -10,6 +11,141 @@ from modules.crash_handler import detect_issue, CrashDeduplicator, minimize_test
 from modules.plateau_detector import PlateauDetector
 from modules.storage import save_crash
 from utils.html_utils import extract_html
+
+
+# ── Redbox Protocol Integration (Attack Brief Consumption) ───────────
+
+def consume_attack_brief(briefs_dir):
+    """Consume the oldest pending attack brief from the briefs directory.
+
+    Atomically renames to .processing to prevent other workers from picking it up.
+    Returns parsed brief dict or None.
+    """
+    if not briefs_dir or not os.path.isdir(briefs_dir):
+        return None
+
+    try:
+        files = sorted(
+            [f for f in os.listdir(briefs_dir) if f.endswith(".json")],
+            key=lambda f: f  # Sort by filename (timestamp-prefixed)
+        )
+    except OSError:
+        return None
+
+    for fname in files:
+        fpath = os.path.join(briefs_dir, fname)
+        processing_path = fpath + ".processing"
+
+        try:
+            # Atomic rename to claim the brief
+            os.rename(fpath, processing_path)
+
+            with open(processing_path, "r") as f:
+                brief = json.load(f)
+
+            brief["_processing_path"] = processing_path
+            return brief
+
+        except (FileNotFoundError, OSError):
+            # Another worker got it first — try next one
+            continue
+        except (json.JSONDecodeError, KeyError) as e:
+            print(f"[brief] Error parsing {fname}: {e}")
+            # Move bad file aside
+            try:
+                os.rename(processing_path, fpath + ".error")
+            except OSError:
+                pass
+            continue
+
+    return None
+
+
+def build_brief_prompt(brief):
+    """Build a test generation prompt from an attack brief.
+
+    Injects the research findings as high-priority context for the LLM.
+    """
+    target = brief.get("target", {})
+    vuln = brief.get("vulnerability", {})
+    trigger = brief.get("trigger", {})
+
+    parts = [
+        "## ATTACK BRIEF FROM RESEARCH PIPELINE",
+        f"**Priority:** {brief.get('priority', 'medium')}",
+        f"**Confidence:** {brief.get('confidence', 'medium')}",
+        "",
+        f"### Target",
+        f"- C++ Class: `{target.get('class', 'unknown')}`",
+        f"- Method: `{target.get('method', 'unknown')}`",
+        f"- Source file: `{target.get('file', 'unknown')}`",
+        "",
+        f"### Vulnerability Hypothesis",
+        f"- Class: {vuln.get('class', 'unknown')}",
+        f"- Hypothesis: {vuln.get('hypothesis', 'No hypothesis provided')}",
+    ]
+
+    if vuln.get("source_evidence"):
+        parts.extend([
+            "",
+            "### C++ Source Evidence",
+            f"```cpp",
+            vuln["source_evidence"],
+            "```",
+        ])
+
+    if vuln.get("related_cve"):
+        parts.append(f"\n**Related CVE:** {vuln['related_cve']}")
+
+    if trigger.get("sequence"):
+        parts.extend([
+            "",
+            "### Suggested Trigger Sequence",
+            trigger["sequence"],
+        ])
+
+    parts.extend([
+        "",
+        "Generate a surgical HTML/JS test case that targets this EXACT vulnerability. "
+        "Use the source evidence above to craft the precise API call sequence needed. "
+        "This is research-guided — be precise, not random.",
+    ])
+
+    return "\n".join(parts)
+
+
+def write_feedback(brief_id, feedback_data, feedback_dir):
+    """Write feedback about a brief's test result for the research pipeline."""
+    if not feedback_dir:
+        return
+
+    os.makedirs(feedback_dir, exist_ok=True)
+    feedback_data["brief_id"] = brief_id
+    feedback_data["timestamp"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+    fpath = os.path.join(feedback_dir, f"{brief_id}_feedback.json")
+    try:
+        with open(fpath, "w") as f:
+            json.dump(feedback_data, f, indent=2)
+    except Exception as e:
+        print(f"[brief] Error writing feedback: {e}")
+
+
+def finalize_brief(brief, success=False):
+    """Clean up a processed brief file."""
+    processing_path = brief.get("_processing_path")
+    if not processing_path or not os.path.exists(processing_path):
+        return
+
+    try:
+        # Move to processed subdirectory
+        briefs_dir = os.path.dirname(processing_path)
+        processed_dir = os.path.join(briefs_dir, "processed")
+        os.makedirs(processed_dir, exist_ok=True)
+        fname = os.path.basename(processing_path).replace(".processing", "")
+        os.rename(processing_path, os.path.join(processed_dir, fname))
+    except OSError:
+        pass
 
 
 def worker_loop(worker_id, config, shared_dedup=None, firefox_version="unknown", shared_tracker=None, shared_novelty=None):
@@ -54,11 +190,20 @@ def worker_loop(worker_id, config, shared_dedup=None, firefox_version="unknown",
 
     print(f"[Worker {worker_id}] Starting...")
 
+    # Redbox protocol brief consumption config
+    briefs_dir = config.get("briefs_dir")
+    feedback_dir = config.get("feedback_dir")
+
     while True:
         test_count += 1
         profile_dir = create_temp_profile()
+        active_brief = None  # Track if this test was brief-guided
 
         try:
+            # 0. Check for attack briefs from Redbox research pipeline
+            #    Brief-guided tests get priority — they're research-backed
+            active_brief = consume_attack_brief(briefs_dir)
+
             # 1. Select strategy via UCB1
             strategy_name, strategy_prompt = select_strategy()
 
@@ -87,7 +232,14 @@ def worker_loop(worker_id, config, shared_dedup=None, firefox_version="unknown",
 
             # Build combined prompt with subsystem requirement FIRST
             subsystem_target = subsystem_hint[0] if subsystem_hint else "JS_engine"
-            if is_plateau and len(subsystem_hint) > 1:
+
+            # If we have an attack brief from Redbox, it takes priority
+            if active_brief:
+                brief_prompt = build_brief_prompt(active_brief)
+                combined_prompt = brief_prompt + "\n\n" + strategy_prompt
+                subsystem_target = active_brief.get("target", {}).get("class", subsystem_target)
+                print(f"[W{worker_id} | T#{test_count}] Using attack brief: {active_brief.get('brief_id', '?')}")
+            elif is_plateau and len(subsystem_hint) > 1:
                 # On plateau, skip the top pick (likely exhausted) and use next candidate
                 subsystem_target = subsystem_hint[1]
                 current_subsystem = subsystem_target
@@ -213,6 +365,15 @@ def worker_loop(worker_id, config, shared_dedup=None, firefox_version="unknown",
                         "content": f"Excellent! That last test case triggered a {issue_reason} (severity {severity}/5). Generate an aggressive VARIANT that might trigger something similar or worse. Mutate it aggressively."
                     })
 
+                    # 14i. Write feedback to Redbox if this was a brief-guided test
+                    if active_brief:
+                        write_feedback(active_brief["brief_id"], {
+                            "crash_id": crash_id,
+                            "severity": severity,
+                            "asan_output": run_result["output"][:2000],
+                            "result": "crash",
+                        }, feedback_dir)
+
                 except Exception as e:
                     print(f"  Error during crash analysis: {e}")
                     record_result(strategy_name, found_crash=True)
@@ -226,6 +387,15 @@ def worker_loop(worker_id, config, shared_dedup=None, firefox_version="unknown",
             # 16. History trimming — keep first message + most recent turns
             if len(history) > max_history_turns * 2:
                 history = history[:1] + history[-(max_history_turns * 2 - 1):]
+
+            # 17. Finalize brief if this was a brief-guided test
+            if active_brief:
+                if not is_issue:
+                    write_feedback(active_brief["brief_id"], {
+                        "result": "no_crash",
+                        "severity": 0,
+                    }, feedback_dir)
+                finalize_brief(active_brief, success=is_issue)
 
         except Exception as e:
             import traceback

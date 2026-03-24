@@ -1,0 +1,22 @@
+{
+  "brief_id": "20260324_011757_ScalarReplacement_uaf",
+  "created_at": "2026-03-24T01:17:57.562079Z",
+  "priority": "medium",
+  "target": {
+    "class": "ScalarReplacement",
+    "method": "IsObjectEscaped",
+    "file": "js/src/jit/ScalarReplacement.cpp"
+  },
+  "vulnerability": {
+    "class": "uaf",
+    "hypothesis": "In IsObjectEscaped (line 287-304), the MSlots case only asserts in DEBUG builds that MSlots consumers are StoreDynamicSlot/LoadDynamicSlot. In release builds, if an MSlots node somehow has a consumer that is NOT one of those (e.g., through optimization passes creating unexpected uses), the object would be incorrectly considered non-escaped. The scalar replacement would then proceed to eliminate the object allocation, but the unexpected consumer would operate on invalid/missing memory. This is especially dangerous because the assertion at line 292 (MOZ_ASSERT(ins->object() != 0)) appears to be checking a pointer value against 0, not an operand index \u2014 it should likely be checking that the object is the correct operand.",
+    "source_evidence": "\n// ScalarReplacement.cpp lines 287-304:\n      case MDefinition::Opcode::Slots: {\n#ifdef DEBUG\n        // Assert that MSlots are only used by MStoreDynamicSlot and\n        // MLoadDynamicSlot.\n        MSlots* ins = def->toSlots();\n        MOZ_ASSERT(ins->object() != 0);\n        for (MUseIterator i(ins->usesBegin()); i != ins->usesEnd(); i++) {\n          // toDefinition should normally never fail, since they don't get\n          // captured by resume points.\n          MDefinition* def = (*i)->consumer()->toDefinition();\n          MOZ_ASSERT(\n              def->op() == MDefinition::Opcode::StoreDynamicSlot ||\n              def->op() == MDefinition::Opcode::LoadDynamicSlot ||\n              def->op() == MDefinition::Opcode::StoreDynamicSlotFromOffset ||\n              def->op() == MDefinition::Opcode::LoadDynamicSlotFromOffset);\n        }\n#endif\n        break;\n      }\n",
+    "related_cve": "CVE-2024-9402"
+  },
+  "trigger": {
+    "sequence": "1. Create an object with enough properties to require dynamic slots (more than the inline slot count, typically > 16 properties)\n2. Manipulate the object such that the MSlots node gets an unexpected consumer through optimization passes (e.g., via GVN or instruction reordering creating a use of MSlots by something other than StoreDynamicSlot/LoadDynamicSlot)\n3. In release builds, the debug-only assertion is skipped, so the object is considered non-escaped\n4. Scalar replacement eliminates the object, but the unexpected MSlots consumer operates on invalid memory\n\n```javascript\nfunction trigger() {\n  // Create object with dynamic slots\n  let obj = {a:1, b:2, c:3, d:4, e:5, f:6, g:7, h:8, \n             i:9, j:10, k:11, l:12, m:13, n:14, o:15, p:16, q:17};\n  // Access dynamic slots in ways that might create unexpected MSlots uses\n  let sum = obj.q + obj.p;\n  return sum;\n}\nfor (let i = 0; i < 100000; i++) trigger();\n```"
+  },
+  "confidence": "low",
+  "status": "pending",
+  "feedback": null
+}

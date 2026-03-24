@@ -1,0 +1,22 @@
+{
+  "brief_id": "20260324_004412_ScalarReplacement_type_confusion",
+  "created_at": "2026-03-24T00:44:12.784725Z",
+  "priority": "medium",
+  "target": {
+    "class": "ScalarReplacement",
+    "method": "IsObjectEscaped",
+    "file": "js/src/jit/ScalarReplacement.cpp"
+  },
+  "vulnerability": {
+    "class": "type_confusion",
+    "hypothesis": "The ScalarReplacement escape analysis in IsObjectEscaped (line 236) tracks object uses through guards like GuardShape, GuardToClass, CheckIsObj, and Unbox, but the PostWriteBarrier case at line 284 unconditionally breaks without checking which operand position the object is at. If the object appears as the *value* operand (not the object operand) of PostWriteBarrier, it could be incorrectly considered non-escaped, leading to scalar replacement of an object that actually escapes. This would cause the JIT to operate on decomposed scalar fields while runtime code sees a real object, causing type confusion or use-after-free when the object is accessed through the escaped reference.",
+    "source_evidence": "\n// js/src/jit/ScalarReplacement.cpp lines 273-305\n    MDefinition* def = consumer->toDefinition();\n    switch (def->op()) {\n      case MDefinition::Opcode::StoreFixedSlot:\n      case MDefinition::Opcode::LoadFixedSlot:\n        // Not escaped if it is the first argument.\n        if (def->indexOf(*i) == 0) {\n          break;\n        }\n        JitSpewDef(JitSpew_Escape, \"is escaped by\\n\", def);\n        return true;\n\n      case MDefinition::Opcode::PostWriteBarrier:\n        break;  // <-- No check on operand index! Object as value operand is treated as non-escaped\n\n      case MDefinition::Opcode::Slots: {\n        // ...\n        break;\n      }\n",
+    "related_cve": ""
+  },
+  "trigger": {
+    "sequence": "1. Create a constructor function that allocates a plain object with fixed shape\n2. In a hot loop, create the object and store it into a slot of another object (triggering PostWriteBarrier where the new object is the value)\n3. Access the stored object reference from outside the loop after the store\n4. The JIT should scalar-replace the inner object since escape analysis misses the PostWriteBarrier value escape\n5. The external access will see corrupted/freed memory instead of a valid object"
+  },
+  "confidence": "medium",
+  "status": "pending",
+  "feedback": null
+}

@@ -1,0 +1,22 @@
+{
+  "brief_id": "20260324_012518_ScalarReplacement_(IsObjectEsc_uaf",
+  "created_at": "2026-03-24T01:25:18.151413Z",
+  "priority": "medium",
+  "target": {
+    "class": "ScalarReplacement (IsObjectEscaped)",
+    "method": "IsObjectEscaped",
+    "file": "js/src/jit/ScalarReplacement.cpp"
+  },
+  "vulnerability": {
+    "class": "uaf",
+    "hypothesis": "In IsObjectEscaped, the MSlots case (line 287-304) only validates that MSlots consumers are StoreDynamicSlot/LoadDynamicSlot/StoreDynamicSlotFromOffset/LoadDynamicSlotFromOffset in DEBUG builds via MOZ_ASSERT. In release builds, if an MSlots node has an unexpected consumer (e.g. from a new MIR opcode or optimization pass that wasn't anticipated), the assertion is skipped and the object is treated as non-escaped. This could allow scalar replacement to proceed incorrectly, removing the object allocation while its slots pointer is used by an unexpected instruction, leading to use-after-free or type confusion when that instruction reads/writes through the dangling slots pointer.",
+    "source_evidence": "\n// ScalarReplacement.cpp lines 287-304:\n      case MDefinition::Opcode::Slots: {\n#ifdef DEBUG\n        // Assert that MSlots are only used by MStoreDynamicSlot and\n        // MLoadDynamicSlot.\n        MSlots* ins = def->toSlots();\n        MOZ_ASSERT(ins->object() != 0);\n        for (MUseIterator i(ins->usesBegin()); i != ins->usesEnd(); i++) {\n          // toDefinition should normally never fail, since they don't get\n          // captured by resume points.\n          MDefinition* def = (*i)->consumer()->toDefinition();\n          MOZ_ASSERT(\n              def->op() == MDefinition::Opcode::StoreDynamicSlot ||\n              def->op() == MDefinition::Opcode::LoadDynamicSlot ||\n              def->op() == MDefinition::Opcode::StoreDynamicSlotFromOffset ||\n              def->op() == MDefinition::Opcode::LoadDynamicSlotFromOffset);\n        }\n#endif\n        break;  // In release: no validation at all, unconditional non-escape\n      }\n",
+    "related_cve": "CVE-2024-9402"
+  },
+  "trigger": {
+    "sequence": "1. Create a plain object with enough properties to require dynamic slots\n2. Access the object's slots in a way that creates an MSlots node with an unexpected consumer\n3. For example, pass the slots pointer through a Phi node or use it in a TypedArray-like access pattern\n4. In release builds, the missing assertion allows the object to be scalar-replaced despite the slots escaping\n5. Example:\n   function trigger() {\n     let obj = {a:1, b:2, c:3, d:4, e:5, f:6, g:7, h:8, i:9, j:10, k:11, l:12, m:13};\n     let arr = [obj.a, obj.b, obj.c, obj.d, obj.e, obj.f, obj.g, obj.h, obj.i, obj.j, obj.k, obj.l, obj.m];\n     return arr;\n   }\n   for (let i = 0; i < 200000; i++) trigger();\n"
+  },
+  "confidence": "low",
+  "status": "pending",
+  "feedback": null
+}

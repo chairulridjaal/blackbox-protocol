@@ -2,10 +2,13 @@
 
 AI-powered Firefox browser fuzzer that uses Claude to generate surgical, CVE-quality test cases targeting memory corruption vulnerabilities. The fuzzer combines multi-armed bandit strategy selection, semantic novelty detection, exploitability-aware crash triage, and automated Bugzilla-ready report generation into a modular, multi-worker framework built for Mozilla's bug bounty program.
 
+Blackbox Protocol is the **execution layer** of a two-part pipeline. It pairs with [Redbox Protocol](#redbox-protocol-integration), a research agent that reads Firefox C++ source code, identifies vulnerability patterns, and produces targeted **attack briefs** that give Blackbox workers precise, hypothesis-driven targets.
+
 ## Table of Contents
 
 - [Features](#features)
 - [Architecture](#architecture)
+- [Redbox Protocol Integration](#redbox-protocol-integration)
 - [Prerequisites](#prerequisites)
 - [Installation](#installation)
 - [Configuration](#configuration)
@@ -22,8 +25,9 @@ AI-powered Firefox browser fuzzer that uses Claude to generate surgical, CVE-qua
 
 ## Features
 
+- **Redbox-Guided Targeting** -- Consumes attack briefs from Redbox Protocol: Claude has read the actual Firefox C++ source and identified specific vulnerable classes, methods, and trigger sequences. Workers prioritize these briefs, then fall back to general strategy fuzzing
 - **Red-Team LLM Generation** -- Claude operates as an elite security researcher persona, generating surgical HTML/JS test cases modeled on real CVE patterns (CVE-2024-9680, CVE-2024-29943, CVE-2025-1009, etc.)
-- **Multi-Worker Concurrency** -- 4 parallel fuzzing workers with shared state (crash deduplication, novelty corpus, subsystem coverage) and diversified initial prompts to avoid correlated exploration
+- **Multi-Worker Concurrency** -- 2 parallel fuzzing workers with shared state (crash deduplication, novelty corpus, subsystem coverage) and diversified initial prompts to avoid correlated exploration
 - **UCB1 Strategy Selection** -- Multi-armed bandit algorithm with atomic strategy claiming under lock, balancing exploration vs. exploitation across 11 attack strategies
 - **Semantic Novelty Detection** -- TF-IDF cosine similarity (character 3-6 n-grams) with shared corpus across all workers filters duplicate test cases before execution
 - **Plateau Detection** -- Automatically detects stalled novelty rates and injects diversity prompts with subsystem rotation
@@ -45,59 +49,54 @@ AI-powered Firefox browser fuzzer that uses Claude to generate surgical, CVE-qua
 ## Architecture
 
 ```
-                            +-------------------+
-                            |     main.py       |
-                            |  (orchestrator)   |
-                            +--------+----------+
-                                     |
-              creates shared state:  |
-              CrashDeduplicator      |
-              SubsystemTracker       |
-              NoveltyTracker         |
-                                     |
-          +----------+----------+----------+----------+
-          |          |          |          |          |
-    +-----+----+  +-+------+  ++---------++  +------+-----+
-    | Worker 1 |  |Worker 2|  | Worker 3 |  | Worker 4  |
-    | worker.py|  |worker.py  | worker.py|  | worker.py |
-    +-----+----+  +---+----+  +----+-----+  +------+----+
-          |            |           |                |
-          +------+-----+-----+----+--------+-------+
-                 |           |             |
-          generator.py  browser.py   crash_handler.py
-          (Claude +     (Firefox +   (detect + triage
-           UCB1 +        ASAN env     + minimize +
-           atomic        + --screenshot  report)
-           lock)         /dev/null)
-                 |           |             |
-                 +-----+-----+------+------+
-                       |            |
-                  novelty.py   subsystem_tracker.py
-                 (TF-IDF,     (18 subsystems,
-                  shared       shared across
-                  corpus)      workers)
-                       |            |
-                       +------+-----+
-                              |
-                         storage.py
-                       (crash artifacts:
-                        minimized.html,
-                        original.html,
-                        report.txt,
-                        output.txt,
-                        meta.json)
-                              |
-                        +-----+-----+
-                        |           |
-                     api.py    dashboard/
-                    (REST)     (React UI)
-
-
-   +-----------------------------------------------------------+
-   |                      watch.py  (cron)                      |
-   |  collects metrics → Claude analysis → auto-fix config     |
-   |  → Telegram alerts → Claude Code apply (optional)         |
-   +-----------------------------------------------------------+
+╔══════════════════════════════════════════════════════════════╗
+║                    REDBOX PROTOCOL                           ║
+║  (reads Firefox C++ source → generates attack briefs)        ║
+╚══════════════════════════════╦═══════════════════════════════╝
+                               ║  briefs/*.json
+                               ▼
+╔══════════════════════════════════════════════════════════════╗
+║                    BLACKBOX PROTOCOL                         ║
+║                                                              ║
+║  ┌──────────────────────────────────────────────────────┐   ║
+║  │                      main.py                          │   ║
+║  │               (orchestrator + shared state)           │   ║
+║  └───────────────┬──────────────────────┬───────────────┘   ║
+║                  │                      │                    ║
+║          ┌───────┴───────┐    ┌─────────┴──────┐           ║
+║          │   Worker 1    │    │   Worker 2      │           ║
+║          │  worker.py    │    │  worker.py      │           ║
+║          └───────┬───────┘    └────────┬────────┘           ║
+║                  │                     │                     ║
+║          ┌───────┴─────────────────────┴───────┐            ║
+║          │                                      │            ║
+║   generator.py        browser.py        crash_handler.py    ║
+║  (Claude + UCB1 +   (Firefox ASan +    (detect + triage     ║
+║   brief injection)   --screenshot)      + minimize + report) ║
+║          │                                      │            ║
+║   novelty.py                          subsystem_tracker.py  ║
+║  (TF-IDF dedup,                      (18 subsystems,        ║
+║   shared corpus)                      shared across workers) ║
+║                                                │            ║
+║                                          storage.py         ║
+║                                      (crash artifacts)      ║
+║                                                │            ║
+║                                    ┌───────────┴───────┐   ║
+║                                    │                   │   ║
+║                                 api.py           dashboard/ ║
+║                                (REST)             (React UI) ║
+║                                                              ║
+║  ┌──────────────────────────────────────────────────────┐   ║
+║  │         watch.py  (cron every 2 hours)                │   ║
+║  │  metrics → Claude analysis → auto-fix → Telegram     │   ║
+║  └──────────────────────────────────────────────────────┘   ║
+╚══════════════════════════════════════════════════════════════╝
+                               ║  feedback/*.json
+                               ▼
+╔══════════════════════════════════════════════════════════════╗
+║          REDBOX PROTOCOL (feedback loop)                     ║
+║  (crash results refine future research directions)           ║
+╚══════════════════════════════════════════════════════════════╝
 ```
 
 ### Shared State
@@ -109,6 +108,74 @@ All workers share three thread-safe objects created by `main.py`:
 | `CrashDeduplicator` | Prevents duplicate crash reports across workers | `threading.Lock` on signature cache |
 | `SubsystemTracker` | Tracks test/crash counts per subsystem, steers coverage | `threading.RLock` on counters |
 | `NoveltyTracker` | TF-IDF corpus for semantic deduplication | `threading.Lock` on corpus + vectorizer |
+
+## Redbox Protocol Integration
+
+Blackbox Protocol is designed to receive **attack briefs** from [Redbox Protocol](../redbox-protocol/), which reads actual Firefox C++ source code and identifies specific vulnerability hypotheses.
+
+### How It Works
+
+1. **Redbox** researches Firefox C++ source, finds a potentially vulnerable code pattern, and writes a brief to `redbox-protocol/briefs/`
+2. **Worker** checks for pending briefs before each test cycle
+3. If a brief is available, it's atomically claimed (renamed `.processing`) so no two workers test the same brief
+4. The worker's LLM prompt is prepended with the brief's C++ target, vulnerability hypothesis, source evidence, and suggested trigger sequence — giving Claude precise context to generate targeted test cases
+5. After the test completes, the worker writes a feedback JSON to `redbox-protocol/feedback/`
+6. **Redbox** reads feedback, updates its knowledge store, and refines future research
+
+### Brief Format
+
+Briefs written by Redbox (consumed by workers):
+
+```json
+{
+  "brief_id": "20260323_143000_jit_uaf",
+  "created_at": "2026-03-23T14:30:00Z",
+  "priority": "high",
+  "target": {
+    "class": "ScalarReplacement",
+    "method": "IsObjectEscaped",
+    "file": "js/src/jit/ScalarReplacement.cpp",
+    "lines": "280-310"
+  },
+  "vulnerability": {
+    "class": "type_confusion",
+    "hypothesis": "PostWriteBarrier at line 284 doesn't check operand index, potentially allowing incorrect escape analysis leading to type confusion",
+    "source_evidence": "// Line 284: PostWriteBarrier(block, ins, /* index */ 0);\n// ← does not validate index against actual operand count",
+    "related_cve": "CVE-2024-29943"
+  },
+  "trigger": {
+    "sequence": "1. Create array with known element types\n2. JIT compile a hot function\n3. During compilation, trigger scalar replacement on an object\n4. Cause type change that invalidates the escape analysis",
+    "js_hint": "Array operations + heavy allocation to force JIT + type-changing writes"
+  },
+  "confidence": "medium"
+}
+```
+
+### Feedback Format
+
+Workers write feedback after testing (consumed by Redbox):
+
+```json
+{
+  "brief_id": "20260323_143000_jit_uaf",
+  "result": "crash",
+  "crash_id": "20260323_151234_w1_t42",
+  "severity": 5,
+  "asan_output": "ERROR: AddressSanitizer: heap-use-after-free ...",
+  "stack_trace": "#0 0x... in ScalarReplacement::IsObjectEscaped ..."
+}
+```
+
+### Configuration
+
+Add these paths to `config.json` to enable integration:
+
+```json
+{
+  "briefs_dir": "/home/ubuntu/redbox-protocol/briefs",
+  "feedback_dir": "/home/ubuntu/redbox-protocol/feedback"
+}
+```
 
 ## Prerequisites
 
@@ -132,7 +199,7 @@ cd blackbox-protocol
 
 ```bash
 python3 -m venv venv
-source venv/bin/activate  # or venv\Scripts\activate on Windows
+source venv/bin/activate
 pip install -r requirements.txt
 ```
 
@@ -180,13 +247,16 @@ Edit `config.json` and set `firefox_path` to your Firefox binary:
 }
 ```
 
-Common paths:
-| OS | Path |
-|---|---|
-| Windows | `C:/Program Files/Mozilla Firefox/firefox.exe` |
-| macOS | `/Applications/Firefox.app/Contents/MacOS/firefox` |
-| Linux | `/usr/bin/firefox` |
-| ASan build | `./firefox-asan/firefox` |
+### 7. Unified startup (recommended)
+
+Use the unified startup script at `/home/ubuntu/start-all.sh` to launch the entire pipeline (Xvfb + fuzzer workers + verifier + dashboard + Redbox research agent):
+
+```bash
+cd /home/ubuntu
+./start-all.sh          # Start everything
+./start-all.sh status   # Check status of all components
+./start-all.sh stop     # Stop all pipeline sessions
+```
 
 ## Configuration
 
@@ -194,13 +264,15 @@ All settings live in `config.json`:
 
 | Key | Default | Description |
 |---|---|---|
-| `workers` | `4` | Number of parallel fuzzing workers |
+| `workers` | `2` | Number of parallel fuzzing workers |
 | `timeout_seconds` | `20` | Max time Firefox runs per test case |
 | `delay_between_tests` | `1` | Seconds between test generations |
 | `min_save_severity` | `2` | Minimum severity to save (1-5). Below this threshold, findings are logged but not saved |
 | `api_port` | `6767` | REST API server port |
 | `dashboard_port` | `6868` | Dashboard server port |
 | `crashes_dir` | `"crashes"` | Output directory for crash artifacts |
+| `briefs_dir` | `"/home/ubuntu/redbox-protocol/briefs"` | Directory to read attack briefs from Redbox |
+| `feedback_dir` | `"/home/ubuntu/redbox-protocol/feedback"` | Directory to write test results back to Redbox |
 | `novelty_threshold` | `0.65` | TF-IDF similarity cutoff (higher = stricter dedup) |
 | `novelty_max_corpus` | `500` | Max test cases retained for novelty comparison |
 | `plateau_window` | `20` | Sliding window size for stall detection |
@@ -261,34 +333,39 @@ Firefox-specific:
 
 ## Usage
 
-### Quick Start (Windows)
+### Quick Start — Unified Pipeline
 
 ```bash
-start.bat
+cd /home/ubuntu
+./start-all.sh
 ```
 
-This launches the API server, dashboard, and fuzzer in separate terminal windows.
+This starts the entire pipeline: Xvfb, Blackbox fuzzer (2 workers), crash verifier, dashboard + API server, and Redbox research agent.
 
 ### Manual Start
 
 Open three terminals:
 
-**Terminal 1 -- API Server**
+**Terminal 1 — API Server**
 
 ```bash
+cd blackbox-protocol
+source venv/bin/activate
 python api.py
 ```
 
-**Terminal 2 -- Dashboard**
+**Terminal 2 — Dashboard**
 
 ```bash
-cd dashboard
+cd blackbox-protocol/dashboard
 npm run dev
 ```
 
-**Terminal 3 -- Fuzzer**
+**Terminal 3 — Fuzzer**
 
 ```bash
+cd blackbox-protocol
+source venv/bin/activate
 python main.py
 ```
 
@@ -296,57 +373,48 @@ The fuzzer will:
 
 1. Test API connectivity
 2. Clean up stale Firefox processes
-3. Spawn 4 worker threads (each with a different initial prompt)
-4. Begin generating and executing test cases
+3. Spawn 2 worker threads (each with a different initial prompt)
+4. Check for pending attack briefs from Redbox Protocol
+5. Begin generating and executing test cases
 
 Press `Ctrl+C` to stop the fuzzer gracefully.
 
-### Linux Setup
+### Monitoring
 
 ```bash
-# Install Xvfb for headless display
-sudo apt install xvfb libgtk-3-0 libdbus-glib-1-2 libasound2 libx11-xcb1 libxt6
+# Watch live fuzzer output
+tail -f logs/fuzzer.log
 
-# Run everything via start.sh (activates venv, starts Xvfb, API, dashboard, fuzzer)
-./start.sh
+# Check all component status
+./start-all.sh status
+
+# Attach to a tmux session
+tmux attach -t fuzzer
+tmux attach -t redbox
+tmux attach -t verifier
+
+# Stop everything
+./start-all.sh stop
 ```
 
-`start.sh` automatically:
-- Activates the Python virtual environment
-- Starts Xvfb, the API server, and the dashboard
-- Rotates `logs/fuzzer.log` if it exceeds 50 MB
-- Pipes all fuzzer output to `logs/fuzzer.log` via `tee`
-
 ### Output
-
-The fuzzer logs activity to stdout:
 
 ```
 ============================================================
 FIREFOX FUZZER - Modular Edition
 ============================================================
-Workers: 4
+Workers: 2
 Firefox: Mozilla Firefox 137.0
 Crashes dir: /home/user/blackbox-protocol/crashes
 Dashboard: http://localhost:6868
 Novelty threshold: 0.65
-Plateau window: 20
-API base URL: https://your-api-endpoint
 ============================================================
-
-Testing API connectivity...
-  https://your-api-endpoint/health → 200 OK
-Press Ctrl+C to stop
 
 [Worker 1] Starting...
 [Worker 2] Starting...
-[Worker 3] Starting...
-[Worker 4] Starting...
 [W1 | T#1 | strategy:use_after_free | subsystem:Web_Animations | novelty:1.00] → OK
-[W2 | T#1 | strategy:gc_pressure | subsystem:XSLT_XPath | novelty:1.00] → OK
-[W3 | T#1 | strategy:type_confusion | subsystem:WebTransport | novelty:0.82] → OK
-[W4 | T#1 | strategy:layout_uaf | subsystem:Canvas_WebGL | novelty:0.75] → CRASH sev:5 sig:a3f29b1c
-  Crash ID: 20260323_142105_w4_t1
+[W2 | T#1 | brief:20260323_143000_jit_uaf | subsystem:JIT | novelty:1.00] → CRASH sev:5 sig:a3f29b1c
+  Crash ID: 20260323_142105_w2_t1
   Files saved to crashes/
 ```
 
@@ -387,34 +455,6 @@ The REST API runs on port `6767` by default.
 | `POST` | `/api/crashes/bulk/delete` | Bulk delete multiple crashes |
 | `GET` | `/api/stats` | Summary statistics with strategy and subsystem breakdowns |
 
-### Examples
-
-```bash
-# List all crashes
-curl http://localhost:6767/api/crashes
-
-# Get crash details
-curl http://localhost:6767/api/crashes/20260322_193432_w1_t1
-
-# Mark a crash as verified
-curl -X PATCH http://localhost:6767/api/crashes/20260322_193432_w1_t1 \
-  -H "Content-Type: application/json" \
-  -d '{"status": "verified"}'
-
-# Delete a crash
-curl -X DELETE http://localhost:6767/api/crashes/20260322_193432_w1_t1
-
-# Bulk update status
-curl -X PATCH http://localhost:6767/api/crashes/bulk/status \
-  -H "Content-Type: application/json" \
-  -d '{"crash_ids": ["20260322_193432_w1_t1", "20260322_193500_w2_t3"], "status": "verified"}'
-
-# Bulk delete
-curl -X POST http://localhost:6767/api/crashes/bulk/delete \
-  -H "Content-Type: application/json" \
-  -d '{"crash_ids": ["20260322_193432_w1_t1"]}'
-```
-
 ## How It Works
 
 ### Fuzzing Loop
@@ -422,20 +462,46 @@ curl -X POST http://localhost:6767/api/crashes/bulk/delete \
 Each worker runs this cycle continuously:
 
 ```
-1.  SELECT STRATEGY    →  UCB1 bandit picks the most promising attack vector
-                           (atomic claim under lock prevents worker collision)
-2.  IDENTIFY TARGETS   →  Shared subsystem tracker highlights underexplored areas
-3.  CHECK PLATEAU      →  If novelty rate is low, inject diversity prompt + rotate subsystem
-4.  GENERATE TEST      →  Claude (red-team persona) creates surgical HTML/JS test case
-5.  NOVELTY FILTER     →  TF-IDF checks similarity against shared corpus across all workers
-6.  EXECUTE            →  Firefox ASan build loads test via --screenshot /dev/null (~8s)
-7.  DETECT CRASH       →  Scan stdout/stderr for ASAN, UBSAN, TSAN, MOZ_CRASH keywords
-8.  SEVERITY RATING    →  Parse ASAN Scariness score + exploitability signals → severity 1-5
-9.  SEVERITY CHECK     →  Skip saving if below min_save_severity threshold
-10. TRIAGE             →  Deduplicate via stack signature, minimize, generate Bugzilla report
-11. STORE              →  Save all artifacts to crashes/{crash_id}/
-12. FEEDBACK           →  Report results back to Claude for next iteration
+1.  CHECK BRIEFS    →  Look for pending attack brief from Redbox Protocol
+                        (atomic claim — only one worker per brief)
+2.  SELECT STRATEGY →  UCB1 bandit picks the most promising attack vector
+                        (falls back to general strategies if no brief)
+3.  IDENTIFY TARGETS→  Shared subsystem tracker highlights underexplored areas
+4.  CHECK PLATEAU   →  If novelty rate is low, inject diversity prompt + rotate subsystem
+5.  GENERATE TEST   →  Claude (red-team persona) creates surgical HTML/JS test case
+                        (if brief active: brief context prepended → highly targeted)
+6.  NOVELTY FILTER  →  TF-IDF checks similarity against shared corpus across all workers
+7.  EXECUTE         →  Firefox ASan build loads test via --screenshot /dev/null (~8s)
+8.  DETECT CRASH    →  Scan stdout/stderr for ASAN, UBSAN, TSAN, MOZ_CRASH keywords
+9.  SEVERITY RATING →  Parse ASAN Scariness score + exploitability signals → severity 1-5
+10. SEVERITY CHECK  →  Skip saving if below min_save_severity threshold
+11. TRIAGE          →  Deduplicate via stack signature, minimize, generate Bugzilla report
+12. STORE           →  Save all artifacts to crashes/{crash_id}/
+13. FEEDBACK        →  Write result to redbox-protocol/feedback/ (if brief was active)
 ```
+
+### Brief-Guided Test Generation
+
+When a worker claims a brief, its generation prompt becomes two-part:
+
+```
+[ATTACK BRIEF — HIGH PRIORITY]
+Target: ScalarReplacement::IsObjectEscaped
+File: js/src/jit/ScalarReplacement.cpp
+Vulnerability: type_confusion
+Hypothesis: PostWriteBarrier at line 284 doesn't check operand index...
+Source evidence:
+    // Line 284: PostWriteBarrier(block, ins, /* index */ 0);
+Suggested trigger:
+    1. Create array with known element types
+    2. JIT compile a hot function
+    ...
+
+[GENERAL STRATEGY]
+You are an elite security researcher...
+```
+
+This gives Claude the specific C++ context it needs to write highly targeted test cases, rather than guessing blindly from strategy templates.
 
 ### Multi-Armed Bandit (UCB1)
 
@@ -535,12 +601,6 @@ crashes/
 │   ├── minimized.html      # Minimal reproducer (Claude-minimized)
 │   ├── report.txt          # Bugzilla-ready bug report
 │   └── output.txt          # Raw Firefox stdout/stderr (ASAN traces, assertions)
-├── 20260322_193500_w2_t3/
-│   ├── meta.json
-│   ├── minimized.html
-│   ├── original.html
-│   ├── report.txt
-│   └── output.txt
 ```
 
 ### meta.json structure
@@ -562,7 +622,8 @@ crashes/
   "strategy_name": "animation_lifecycle",
   "subsystem": "Web_Animations",
   "novelty_skips": 2,
-  "firefox_version": "Mozilla Firefox 137.0"
+  "firefox_version": "Mozilla Firefox 137.0",
+  "brief_id": "20260323_143000_jit_uaf"
 }
 ```
 
@@ -581,16 +642,14 @@ crashes/
 ```
 blackbox-protocol/
 ├── main.py                    # Entry point — loads config, creates shared state, spawns workers
-├── worker.py                  # Fuzzing loop with diversified initial prompts per worker
+├── worker.py                  # Fuzzing loop — UCB1, brief consumption, feedback writing
 ├── watch.py                   # Monitoring tool — metrics, Claude analysis, Telegram alerts
+├── verify.py                  # Crash verification daemon
 ├── api.py                     # FastAPI REST server for crash management
 ├── config.json                # All tunable parameters
 ├── requirements.txt           # Python dependencies
 ├── start.sh                   # Linux launcher (venv, Xvfb, log rotation, tee)
-├── start.bat                  # Windows one-click launcher
 ├── .env                       # API + Telegram credentials (not committed)
-├── debug_test.py              # Standalone Firefox ASan build verification (5 test payloads)
-├── verify_pipeline.py         # End-to-end pipeline verification (extraction, novelty, execution)
 │
 ├── modules/                   # Core fuzzing engine
 │   ├── browser.py             # Firefox process management, ASAN/UBSAN/TSAN env, --screenshot
@@ -614,12 +673,20 @@ blackbox-protocol/
 │           ├── CrashDetail.jsx# Detailed crash view with delete
 │           └── Stats.jsx      # Statistics, strategy charts, subsystem coverage
 │
+├── briefs/                    # Attack briefs from Redbox Protocol (auto-consumed by workers)
+│   ├── {timestamp}_{target}.json       # Pending brief (worker will claim this)
+│   ├── {timestamp}_{target}.processing # Being tested by a worker
+│   └── processed/
+│       └── {timestamp}_{target}.json   # Completed briefs
+│
+├── feedback/                  # Results written back to Redbox Protocol
+│   └── {brief_id}_result.json
+│
 ├── logs/                      # Runtime logs (created automatically)
-│   ├── fuzzer.log             # Main fuzzer output (via tee from start.sh)
+│   ├── fuzzer.log             # Main fuzzer output (via tee)
+│   ├── verifier.log           # verify.py crash verification output
 │   ├── watcher.log            # watch.py run summaries
 │   ├── auto_fixes.log         # Config changes applied by watch.py
-│   ├── claude_code_runs.log   # Claude Code invocation output
-│   ├── restarts.log           # Fuzzer restart history
 │   └── suggestions_*.txt      # Full Claude analysis JSON per run
 │
 └── crashes/                   # Output directory (per-crash subdirectories)
@@ -653,39 +720,6 @@ crontab -e
 0 */2 * * * cd /home/ubuntu/blackbox-protocol && /home/ubuntu/blackbox-protocol/venv/bin/python3 watch.py >> logs/watcher.log 2>&1
 ```
 
-### Test manually
-
-```bash
-source venv/bin/activate && python3 watch.py
-```
-
-### Logs
-
-| File | Contents |
-|---|---|
-| `logs/watcher.log` | One-line summary per run (health, fix counts, crash count) |
-| `logs/auto_fixes.log` | Every auto-applied config change with timestamp |
-| `logs/suggestions_*.txt` | Full Claude JSON response per run |
-| `logs/claude_code_runs.log` | Claude Code invocation output (if enabled) |
-| `logs/restarts.log` | Fuzzer restart timestamps |
-
-### Claude Code auto-apply
-
-When `claude_code_auto_apply` is set to `true` in `config.json`, `watch.py` will:
-
-1. Invoke `claude --print --dangerously-skip-permissions` with the manual fix instructions
-2. Log all output to `logs/claude_code_runs.log`
-3. Restart the fuzzer via tmux (`kill-session` + `new-session`)
-4. Send a Telegram notification with the result
-
-This is disabled by default. Enable it only after verifying the watcher produces sensible suggestions:
-
-```json
-{
-  "claude_code_auto_apply": true
-}
-```
-
 ## Troubleshooting
 
 ### API connectivity fails on startup
@@ -699,7 +733,7 @@ Verify your `ANTHROPIC_BASE_URL` in `.env` is correct and the endpoint is reacha
 
 ### Firefox not found
 
-Set `firefox_path` in `config.json` to the full path of your Firefox binary. On Windows, use forward slashes: `C:/Program Files/Mozilla Firefox/firefox.exe`.
+Set `firefox_path` in `config.json` to the full path of your Firefox binary.
 
 ### Firefox fails to start (missing libraries)
 
@@ -727,25 +761,19 @@ This usually means low-severity findings (timeouts, minor errors) are producing 
 
 If worker logs show the same strategies and subsystems in lockstep:
 - Verify you're running the latest code with atomic strategy selection
-- Each worker should have a different initial prompt (8 prompts rotate by worker_id)
+- Each worker should have a different initial prompt (rotates by worker_id)
 - The shared `NoveltyTracker` prevents cross-worker duplication
 
 ### No crashes detected
 
 - Use an **ASan build** of Firefox (`pip install fuzzfetch && fuzzfetch --asan --fuzzing -n firefox-asan`)
 - Lower `novelty_threshold` (e.g., `0.55`) to allow more test case variations
-- Increase `workers` for higher throughput (4 workers recommended for 8 vCPU / 64GB RAM)
-- Decrease `delay_between_tests` if your API rate limit allows
+- Check that Redbox Protocol is producing attack briefs — brief-guided tests are far more likely to crash
+- Increase `workers` for higher throughput (2 workers is tuned for 1 deep research session per 8 minutes)
 
 ### Dashboard not loading
 
 Make sure the API server (`python api.py`) is running before starting the dashboard. The dashboard proxies requests to `http://localhost:6767`.
-
-### High memory usage
-
-- Reduce `novelty_max_corpus` to limit the TF-IDF corpus size
-- Reduce `workers` count
-- The fuzzer automatically kills stale Firefox processes, but you can manually clean up with `pkill firefox` (Linux/macOS) or `taskkill /F /IM firefox.exe` (Windows)
 
 ## License
 

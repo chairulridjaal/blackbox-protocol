@@ -4,7 +4,7 @@
     "_firefox_path_note": "VERIFY: run 'find ~/firefox-asan -name firefox -type f' to confirm path",
     "firefox_path": "/home/ubuntu/blackbox-protocol/firefox-asan/firefox",
     "crashes_dir": "crashes",
-    "workers": 4,
+    "workers": 2,
     "timeout_seconds": 20,
     "delay_between_tests": 1,
     "dashboard_port": 6868,
@@ -139,5 +139,7 @@
     "history_max_turns": 6,
     "xvfb_display": ":99",
     "use_xvfb": true,
-    "claude_code_auto_apply": false
+    "claude_code_auto_apply": false,
+    "briefs_dir": "/home/ubuntu/redbox-protocol/briefs",
+    "feedback_dir": "/home/ubuntu/redbox-protocol/feedback"
 }
