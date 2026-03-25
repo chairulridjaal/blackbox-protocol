@@ -3,13 +3,13 @@ import json
 import time
 import random
 from anthropic import Anthropic
-from modules.browser import launch_firefox, create_temp_profile, cleanup_profile
-from modules.generator import select_strategy, record_result, generate_test_case
-from modules.novelty import NoveltyTracker
-from modules.subsystem_tracker import SubsystemTracker
-from modules.crash_handler import detect_issue, CrashDeduplicator, minimize_test_case, generate_report
-from modules.plateau_detector import PlateauDetector
-from modules.storage import save_crash
+from src.modules.browser import launch_firefox, create_temp_profile, cleanup_profile
+from src.modules.generator import select_strategy, record_result, generate_test_case
+from src.modules.novelty import NoveltyTracker
+from src.modules.subsystem_tracker import SubsystemTracker
+from src.modules.crash_handler import detect_issue, CrashDeduplicator, minimize_test_case, generate_report
+from src.modules.plateau_detector import PlateauDetector
+from src.modules.storage import save_crash
 from utils.html_utils import extract_html
 
 

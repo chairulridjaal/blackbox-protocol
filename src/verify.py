@@ -48,7 +48,7 @@ from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 from anthropic import Anthropic
 
-from modules.browser import (
+from src.modules.browser import (
     launch_firefox,
     create_temp_profile,
     cleanup_profile,
@@ -99,7 +99,7 @@ def load_config():
     load_dotenv(override=True)
 
     config_path = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "config.json"
+        os.path.dirname(os.path.abspath(__file__)), "../config/config.json"
     )
     with open(config_path) as f:
         config = json.load(f)

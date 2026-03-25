@@ -21,7 +21,7 @@ CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 BASE_DIR = Path(__file__).resolve().parent
 LOGS_DIR = BASE_DIR / "logs"
 CRASHES_DIR = BASE_DIR / "crashes"
-CONFIG_PATH = BASE_DIR / "config.json"
+CONFIG_PATH = BASE_DIR / "../config/config.json"
 GENERATOR_PATH = BASE_DIR / "modules" / "generator.py"
 
 
@@ -235,7 +235,7 @@ Respond in this EXACT JSON format, no other text:
     {{
       "description": "what this fixes and expected impact",
       "confidence": "high",
-      "file": "config.json",
+      "file": "../config/config.json",
       "type": "config_value",
       "key": "timeout_seconds",
       "value": 45

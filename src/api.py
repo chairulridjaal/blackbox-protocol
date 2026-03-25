@@ -18,7 +18,7 @@ app.add_middleware(
 )
 
 def load_config():
-    with open("config.json", "r") as f:
+    with open("../config/config.json", "r") as f:
         return json.load(f)
 
 CONFIG = load_config()

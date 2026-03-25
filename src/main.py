@@ -13,7 +13,7 @@ def load_config():
     """Load config with defaults for new keys, secrets from .env."""
     load_dotenv(override=True)
 
-    config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
+    config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../config/config.json")
     with open(config_path, "r") as f:
         config = json.load(f)
 
@@ -90,9 +90,9 @@ def main():
     if config.get("auto_open_dashboard"):
         print(f"\nStart dashboard in another terminal.\n")
 
-    from modules.crash_handler import CrashDeduplicator
-    from modules.subsystem_tracker import SubsystemTracker
-    from modules.novelty import NoveltyTracker
+    from src.modules.crash_handler import CrashDeduplicator
+    from src.modules.subsystem_tracker import SubsystemTracker
+    from src.modules.novelty import NoveltyTracker
     shared_dedup = CrashDeduplicator()
     shared_tracker = SubsystemTracker()
     shared_novelty = NoveltyTracker(
