@@ -62,7 +62,7 @@ MAX_CONCURRENT = 2          # Max simultaneous verifications
 REPRO_RUNS = 5              # Number of reproducibility test runs
 VERIFY_TIMEOUT = 30         # Timeout per Firefox run (seconds)
 SETTLE_DELAY = 10           # Wait for fuzzer to finish writing files
-ANALYSIS_MODEL = "claude-opus-4-6"
+ANALYSIS_MODEL = "claude-opus-4-5"
 
 logger = logging.getLogger("verifier")
 _semaphore = threading.Semaphore(MAX_CONCURRENT)

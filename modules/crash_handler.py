@@ -5,7 +5,7 @@ import glob
 import json
 from utils.html_utils import extract_html
 
-ANALYSIS_MODEL = "claude-opus-4.6"
+ANALYSIS_MODEL = "claude-opus-4.5"
 
 
 DEFAULT_ASAN_KEYWORDS = [

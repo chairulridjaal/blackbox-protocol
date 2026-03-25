@@ -269,7 +269,7 @@ NEVER suggest auto fixes for:
         "content-type": "application/json",
     }
     body = {
-        "model": "claude-opus-4-6",
+        "model": "claude-opus-4-5",
         "max_tokens": 2048,
         "system": "You are a performance analyst for an automated browser testing tool. Analyze the metrics provided and suggest specific, safe improvements. Be concise. Always reference exact file names and config keys.",
         "messages": [{"role": "user", "content": user_prompt}],

@@ -2,7 +2,7 @@ import math
 import threading
 from utils.html_utils import extract_html
 
-GENERATION_MODEL = "claude-sonnet-4.6"
+GENERATION_MODEL = "claude-sonnet-4.5"
 
 SYSTEM_PROMPT = """You are an elite red-team browser security researcher. You have discovered multiple CVEs in Gecko/Firefox and have been paid six-figure bounties from Mozilla. You think like an attacker: you study the C++ source on Searchfox, identify invariants the developers assume will hold, then craft minimal HTML/JS that violates those invariants at the exact moment a raw pointer or unguarded reference is live.
 
@@ -192,6 +192,11 @@ STRATEGIES = {
     },
     "jit_range_analysis": {
         "prompt": "Generate a test case targeting SPIDERMONKEY JIT RANGE ANALYSIS — the same bug class as CVE-2024-29943 ($100K Pwn2Own). Key patterns: (1) Create a function with an index variable that the JIT proves is in-bounds via range analysis, then violate that proof by changing array length after JIT compilation. (2) Use integer overflow in range propagation — the JIT tracks ranges as (min, max) and overflow can make min > max, causing it to believe any value is valid. (3) Exploit phi-node range widening in loops — the JIT widens ranges at loop headers, and carefully crafted loop bounds can cause the widened range to include OOB values. (4) Use OSR (on-stack replacement) entry points where the range state from the interpreter doesn't match JIT assumptions. (5) Trigger bailout and re-optimization with values that invalidate previously computed ranges. Target: Range Analysis pass, BoundsCheck elimination, MBoundsCheck::foldsTo, RangeAnalysis::analyzeLoop. Your output must include the top comment block.",
+        "uses": 0,
+        "crashes": 0,
+    },
+    "integer_overflow": {
+        "prompt": "Generate a test case targeting INTEGER OVERFLOW in graphics/layout math. Key pattern: DIFFERENTIAL BOUNDS CHECKING — outer functions use safe conversion (GfxRectToIntRect, CheckedInt) but inner functions use unsafe (RoundedToInt, direct cast). Key patterns: (1) SVG filter: region='0,0,100,100' passes top-level check, but <feFlood x='2147483600' width='2147483600'/> overflows in ComputeFilterPrimitiveSubregion→RoundedToInt, resulting in tiny allocation but large write offset. (2) Canvas: width=100 passes validation, but createImageData(width*multiplier*4) overflows allocation math, allocates small buffer, writes to large offset. (3) CSS Grid: small explicit grid passes check, but auto-placed items cause dimension overflow in nsGridContainerFrame. (4) Image decode: width and height validated separately, but width*height*4 overflows buffer calculation. (5) Font metrics: glyph bounds x/y near INT32_MAX overflow in gfxFont::GetGlyphBounds calculation. Use INT32_MAX-epsilon values (2147483600, 0x7FFFFFF0) to pass outer checks but trigger nested overflow. Chain operations: safe outer call → unsafe nested conversion → corrupted IntRect → buffer allocation → OOB write. Target C++: SVGFilterInstance::ComputeFilterPrimitiveSubregion (RoundedToInt), FilterSupport::RenderFilterDescription, CanvasRenderingContext2D::CreateImageData, nsGridContainerFrame dimension calculation, ImageDecoder buffer allocation, gfxFont::GetGlyphBounds. Expected: ASan heap-buffer-overflow on write to undersized buffer. Your output must include the top comment block.",
         "uses": 0,
         "crashes": 0,
     },

@@ -19,6 +19,7 @@ env/
 # Runtime output
 crashes/
 logs/
+briefs/
 
 # Node (dashboard)
 dashboard/node_modules/
@@ -26,6 +27,7 @@ dashboard/node_modules/
 # Claude Code
 .claude/
 plans/
+.claude-memory/
 
 # Environment / secrets
 .env
@@ -39,3 +41,4 @@ briefs/
 
 # FireFox
 firefox-asan/
+firefox-esr-asan/   

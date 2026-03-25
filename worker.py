@@ -379,8 +379,58 @@ def worker_loop(worker_id, config, shared_dedup=None, firefox_version="unknown",
                     record_result(strategy_name, found_crash=True)
                 plateau_detector.update(True)
             else:
-                # 15. No issue found
-                print(f"[W{worker_id} | T#{test_count} | strategy:{strategy_name} | subsystem:{current_subsystem} | novelty:{score:.2f} | plateau:{is_plateau}] → OK")
+                # 15. No issue found on Nightly
+                print(f"[W{worker_id} | T#{test_count} | strategy:{strategy_name} | subsystem:{current_subsystem} | novelty:{score:.2f} | plateau:{is_plateau}] → OK (Nightly)")
+
+                # 15a. Differential testing: try ESR if configured
+                esr_path = config.get("firefox_esr_path")
+                if config.get("differential_testing") and esr_path and os.path.exists(esr_path):
+                    esr_result = launch_firefox(
+                        esr_path, test_file, profile_dir,
+                        config["timeout_seconds"], display
+                    )
+                    esr_issue, esr_reason, esr_severity = detect_issue(esr_result, config)
+
+                    if esr_issue and esr_severity >= config.get("min_save_severity", 2):
+                        # Found something! Crashes ESR but not Nightly = patched bug
+                        is_dup, signature = deduplicator.is_duplicate(esr_result["output"], esr_reason, config["crashes_dir"])
+                        if not is_dup:
+                            print(f"[W{worker_id} | T#{test_count}] → DIFFERENTIAL CRASH! ESR sev:{esr_severity} sig:{signature[:8]} (patched in Nightly)")
+                            try:
+                                minimized = minimize_test_case(client, html_content, esr_reason, esr_result["output"])
+                                report = generate_report(client, html_content, minimized, esr_reason, esr_result["output"], esr_severity)
+                                # Mark as differential crash in report
+                                report = f"[DIFFERENTIAL - Patched in Nightly {firefox_version}]\n\n" + report
+                                crash_id, html_path, report_path = save_crash(
+                                    minimized, report, html_content, esr_result["output"],
+                                    f"[DIFF] {esr_reason}", esr_severity, signature, strategy_name,
+                                    current_subsystem, worker_id, test_count,
+                                    config["crashes_dir"], novelty_skips, f"ESR (diff vs {firefox_version})"
+                                )
+                                print(f"  Differential crash saved: {crash_id}")
+                                record_result(strategy_name, found_crash=True)
+                                tracker.record_crash(current_subsystem)
+                                plateau_detector.update(True)
+                                if active_brief:
+                                    write_feedback(active_brief["brief_id"], {
+                                        "crash_id": crash_id,
+                                        "severity": esr_severity,
+                                        "asan_output": esr_result["output"][:2000],
+                                        "result": "differential_crash",
+                                    }, feedback_dir)
+                                # Skip normal "no crash" path
+                                if len(history) > max_history_turns * 2:
+                                    history = history[:1] + history[-(max_history_turns * 2 - 1):]
+                                if active_brief:
+                                    finalize_brief(active_brief, success=True)
+                                continue
+                            except Exception as e:
+                                print(f"  Error analyzing ESR crash: {e}")
+                        else:
+                            print(f"[W{worker_id} | T#{test_count}] → ESR crash DUP (sig:{signature[:8]})")
+                    else:
+                        print(f"[W{worker_id} | T#{test_count}] → ESR OK")
+
                 record_result(strategy_name, found_crash=False)
                 plateau_detector.update(True)
 
