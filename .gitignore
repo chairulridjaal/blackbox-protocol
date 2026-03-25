@@ -35,6 +35,7 @@ plans/
 Thumbs.db
 Desktop.ini
 .DS_Store
+briefs/
 
 # FireFox
 firefox-asan/
